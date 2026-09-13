@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "enterprise-agent"
+version = "0.1.0"
+description = "Trusted vertical slice for an enterprise decision Agent platform"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "asyncmy>=0.2.10,<1",
+    "cryptography>=45,<47",
+    "fastapi>=0.141,<1",
+    "httpx>=0.28,<1",
+    "langgraph>=0.6,<2",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.12,<3",
+    "PyJWT>=2.10,<3",
+    "SQLAlchemy>=2.0,<3",
+    "uvicorn[standard]>=0.52,<1",
+]
+
+[project.optional-dependencies]
+rag = [
+    "chromadb>=1.0,<2",
+    "pypdf>=6.0,<7",
+    "sentence-transformers>=5.1,<6",
+]
+dev = [
+    "pytest>=8.4,<9",
+    "pytest-asyncio>=1.2,<2",
+]
+
+[project.scripts]
+enterprise-agent = "app.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: requires an external service such as MySQL",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"

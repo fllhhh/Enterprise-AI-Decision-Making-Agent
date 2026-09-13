@@ -1,0 +1,42 @@
+{
+  "sales_policy.md": {
+    "doc_id": "doc-sales-policy",
+    "title": "销售经营分析口径",
+    "version": "1.0",
+    "effective_at": "2026-01-01T00:00:00+00:00",
+    "source": "sales_policy.md",
+    "acl_departments": ["finance", "sales"],
+    "acl_roles": ["exec"],
+    "acl_public": false
+  },
+  "inventory_policy.md": {
+    "doc_id": "doc-inventory-policy",
+    "title": "库存管理口径",
+    "version": "1.0",
+    "effective_at": "2026-01-01T00:00:00+00:00",
+    "source": "inventory_policy.md",
+    "acl_departments": ["operations", "supply"],
+    "acl_roles": ["exec"],
+    "acl_public": false
+  },
+  "travel_policy.md": {
+    "doc_id": "doc-travel-policy",
+    "title": "员工差旅制度",
+    "version": "1.2",
+    "effective_at": "2026-03-01T00:00:00+00:00",
+    "source": "travel_policy.md",
+    "acl_departments": ["hr"],
+    "acl_roles": ["hr_manager", "exec"],
+    "acl_public": false
+  },
+  "public_glossary.md": {
+    "doc_id": "doc-public-glossary",
+    "title": "企业指标公共术语表",
+    "version": "1.0",
+    "effective_at": "2026-01-01T00:00:00+00:00",
+    "source": "public_glossary.md",
+    "acl_departments": [],
+    "acl_roles": [],
+    "acl_public": true
+  }
+}

@@ -1,0 +1,170 @@
+# 企业智能决策 Agent 平台 v0.1
+
+一个可运行、可验证的企业智能决策 Agent 可信纵向切片。服务通过 JWT 识别用户，以 LangGraph 固定工作流处理知识问答和受控数据查询，并在生成答案前建立 Evidence。
+
+## v0.1 能力
+
+- `KnowledgeSkill`：本地 BGE Embedding、持久化 Chroma、Top-5 Dense 检索、文档版本和 ACL 前置过滤、引用型答案。
+- `DataSkill`：只允许三个已审批参数化查询模板，不开放自由 Text2SQL。
+- LangGraph 固定流程：`normalize -> route -> knowledge|data|clarify|mixed_unsupported -> validate_evidence -> respond`。
+- 本地 HS256 JWT，包含 `sub`、`department`、`roles`、`iss`、`aud`、`iat`、`exp`。
+- 每个请求返回 `run_id`、`trace_id`、`thread_id`，并输出结构化运行日志。
+- MySQL 使用只读账号、稳定视图、参数绑定、结果行数限制和查询超时。
+- 90 条固定评测集，覆盖 Router、Knowledge、Data 和 Security。
+
+明确不包含 Mixed、Planner、InventoryRisk、SQLGlot、完整权限服务、BM25、Reranker、MCP、多 Agent、前端、SSE、Redis、应用 PostgreSQL 和生产 Trace。
+
+## 快速启动
+
+要求 Python 3.13，以及一个 OpenAI 兼容 Chat Completion API。
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[rag,dev]"
+Copy-Item .env.example .env
+```
+
+编辑 `.env`，至少配置：
+
+```dotenv
+LLM_BASE_URL=http://127.0.0.1:8001/v1
+LLM_API_KEY=your-key
+LLM_MODEL=qwen-plus
+JWT_SECRET=replace-with-at-least-32-random-characters
+MYSQL_DSN=mysql+asyncmy://agent_ro:agent_ro@127.0.0.1:3306/enterprise_demo?charset=utf8mb4
+```
+
+启动演示 MySQL：
+
+```powershell
+docker compose up -d mysql
+docker compose ps
+```
+
+`docker/mysql/init` 会创建只读账号 `agent_ro`、`v_ai_sales_orders` 和 `v_ai_inventory_snapshots`，并写入演示数据。
+
+首次启动前导入中文知识样例：
+
+```powershell
+.\.venv\Scripts\enterprise-agent.exe ingest-demo
+```
+
+签发本地演示 token：
+
+```powershell
+.\.venv\Scripts\enterprise-agent.exe issue-token `
+  --user demo.sales `
+  --department sales `
+  --roles employee
+```
+
+启动服务：
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+调用查询接口：
+
+```powershell
+$token = "<上一步输出的 access_token>"
+Invoke-RestMethod `
+  -Uri http://127.0.0.1:8000/api/v1/query `
+  -Method Post `
+  -Headers @{ Authorization = "Bearer $token"; "X-Trace-ID" = "demo-trace-001" } `
+  -ContentType "application/json" `
+  -Body '{"query":"统计2026年7月销售额","thread_id":"demo-thread"}'
+```
+
+OpenAPI 页面位于 `http://127.0.0.1:8000/docs`。
+
+## API
+
+### `POST /api/v1/query`
+
+```json
+{
+  "query": "销售总额按哪个日期统计？",
+  "thread_id": "demo-thread"
+}
+```
+
+响应状态固定为：
+
+- `answered`：已生成有证据的答案。
+- `clarify`：信息不足、没有模板或没有可访问证据。
+- `unsupported`：请求属于 v0.1 明确不支持的 Mixed 场景。
+- `error`：保留给结构化错误响应。
+
+### 健康检查
+
+- `GET /health/live`：进程存活。
+- `GET /health/ready`：检查 Embedding、Chroma 和 MySQL，任一失败返回 HTTP 503。
+
+## 测试与评测
+
+不安装本地 BGE 和 Chroma，只运行单元、契约和 Fake 端到端测试：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+运行 90 条离线评测：
+
+```powershell
+.\.venv\Scripts\enterprise-agent.exe evaluate --mode fake
+```
+
+评测报告默认写入 `reports/v0.1-evaluation.json`，验收门禁为：
+
+- Router accuracy 大于等于 90%。
+- Knowledge Recall@5 大于等于 80%。
+- 支持的数据模板正确率大于等于 90%。
+- 越权或无证据事实回答成功数为 0。
+- Evidence 覆盖率大于等于 90%。
+- 全部响应具有 trace_id。
+
+真实模式：
+
+```powershell
+.\.venv\Scripts\enterprise-agent.exe evaluate --mode real
+```
+
+真实模式要求 `.env`、MySQL、BGE 和 Chat API 均可用。
+
+已准备好 MySQL 实例时，可以运行显式集成测试：
+
+```powershell
+$env:MYSQL_TEST_DSN = "mysql+asyncmy://agent_ro:agent_ro@127.0.0.1:3306/enterprise_demo?charset=utf8mb4"
+.\.venv\Scripts\python.exe -m pytest -m integration -q
+```
+
+## 数据与安全边界
+
+- LLM 不生成 SQL、表名、权限条件或文档 ACL。
+- DataSkill 只能选择服务端注册的模板，未知参数和越界日期会被拒绝。
+- 部门范围由 JWT 可信 claim 和服务端模板注入，客户端不能自行指定。
+- 知识检索先执行部门、角色、生效时间和激活版本过滤，再做向量检索。
+- 低于 `RETRIEVAL_MIN_SCORE` 的片段不会进入 Answer 上下文。
+- 数据答案由确定性渲染器生成，不经过自由文本数字改写。
+
+外部 MySQL 必须提供字段兼容的只读视图：
+
+- `v_ai_sales_orders(order_id, order_date, department_id, region, customer_id, product_id, quantity, amount)`
+- `v_ai_inventory_snapshots(snapshot_date, department_id, warehouse_id, product_id, quantity_on_hand, quantity_in_transit)`
+
+## 项目结构
+
+```text
+app/
+  api/           FastAPI 路由和认证依赖
+  domain/        公共数据契约与错误类型
+  evaluation/    90 条评测集和评测运行器
+  graph/         LangGraph 状态与固定工作流
+  infra/         LLM、Embedding、Chroma、MySQL、日志和测试替身
+  resources/     演示知识文档
+  security/      JWT 签发与验证
+  skills/        Router、KnowledgeSkill、DataSkill
+docker/mysql/    容器初始化 Schema、视图和演示数据
+tests/           单元、ACL、API 和评测门禁测试
+```
