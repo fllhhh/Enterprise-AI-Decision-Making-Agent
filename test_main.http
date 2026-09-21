@@ -1,6 +1,7 @@
-# Set the token returned by:
+# 令牌过期后重新签发：
 # .\.venv\Scripts\enterprise-agent.exe issue-token --user demo.sales --department sales --roles employee
-@token = paste-token-here
+# 注意：必须用当前 .env 里同一个 JWT_SECRET 签发（在项目根目录执行）
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkZW1vLnNhbGVzIiwiZGVwYXJ0bWVudCI6InNhbGVzIiwicm9sZXMiOlsiZW1wbG95ZWUiXSwiaXNzIjoiZW50ZXJwcmlzZS1hZ2VudC1sb2NhbCIsImF1ZCI6ImVudGVycHJpc2UtYWdlbnQtYXBpIiwiaWF0IjoxNzg5OTU4MDQxLCJleHAiOjE3OTAwNDQ0NDF9.GyVsLxfpGyPIiXfJASm6mUGkCRVOqxLIlQb-m-31R-o
 
 GET http://127.0.0.1:8000/health/live
 Accept: application/json
