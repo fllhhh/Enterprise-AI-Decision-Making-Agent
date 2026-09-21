@@ -1,3 +1,5 @@
+"""规则优先、LLM 结构化输出兜底的请求路由。"""
+
 from __future__ import annotations
 
 import json
@@ -66,7 +68,10 @@ _CLARIFY_PATTERNS = (
 
 
 class RouterSkill:
+    """将问题分类为 knowledge、data、mixed 或 clarify。"""
+
     def __init__(self, *, chat_model: ChatModel, confidence_threshold: float = 0.70) -> None:
+        """保存兜底模型和澄清阈值。"""
         self._chat_model = chat_model
         self._confidence_threshold = confidence_threshold
 
@@ -76,6 +81,11 @@ class RouterSkill:
         query: str,
         conversation_summary: str = "",
     ) -> RouterDecision:
+        """返回经过校验的路由决策。
+
+        高置信度显式规则先于模型执行，使常见请求保持确定性，
+        并在类别明确时避免调用模型。
+        """
         normalized = re.sub(r"\s+", " ", query).strip()
         rule_decision = _rule_decision(normalized)
         if rule_decision is not None:
@@ -89,6 +99,7 @@ class RouterSkill:
         query: str,
         conversation_summary: str,
     ) -> RouterDecision:
+        """要求对话模型返回严格的 JSON 分类结果。"""
         prompt = (
             "请将用户问题分类为以下 route 之一：knowledge、data、mixed、clarify。\n"
             "knowledge 指企业制度、流程、政策等文档问答；"
@@ -112,6 +123,7 @@ class RouterSkill:
 
 
 def _rule_decision(query: str) -> RouterDecision | None:
+    """在调用模型前应用确定性意图规则。"""
     if not query:
         return RouterDecision(route=Route.CLARIFY, confidence=1.0, reason="空问题")
     if any(re.fullmatch(pattern, query, flags=re.IGNORECASE) for pattern in _CLARIFY_PATTERNS):
@@ -167,6 +179,7 @@ def _rule_decision(query: str) -> RouterDecision | None:
 
 
 def _apply_threshold(decision: RouterDecision, threshold: float) -> RouterDecision:
+    """将低置信度决策转换为澄清请求。"""
     if decision.confidence < threshold:
         return RouterDecision(
             route=Route.CLARIFY,

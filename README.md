@@ -5,18 +5,18 @@
 ## v0.1 能力
 
 - `KnowledgeSkill`：本地 BGE Embedding、持久化 Chroma、Top-5 Dense 检索、文档版本和 ACL 前置过滤、引用型答案。
-- `DataSkill`：只允许三个已审批参数化查询模板，不开放自由 Text2SQL。
+- `DataSkill`：使用 SQLAlchemy ORM 构建三个已审批查询模板，不开放自由 Text2SQL。
 - LangGraph 固定流程：`normalize -> route -> knowledge|data|clarify|mixed_unsupported -> validate_evidence -> respond`。
 - 本地 HS256 JWT，包含 `sub`、`department`、`roles`、`iss`、`aud`、`iat`、`exp`。
 - 每个请求返回 `run_id`、`trace_id`、`thread_id`，并输出结构化运行日志。
-- MySQL 使用只读账号、稳定视图、参数绑定、结果行数限制和查询超时。
+- PostgreSQL 使用 ORM 映射只读视图、参数绑定、结果行数限制和查询超时。
 - 90 条固定评测集，覆盖 Router、Knowledge、Data 和 Security。
 
-明确不包含 Mixed、Planner、InventoryRisk、SQLGlot、完整权限服务、BM25、Reranker、MCP、多 Agent、前端、SSE、Redis、应用 PostgreSQL 和生产 Trace。
+明确不包含 Mixed、Planner、InventoryRisk、SQLGlot、完整权限服务、BM25、Reranker、MCP、多 Agent、前端、SSE、Redis、生产级数据库高可用和生产 Trace。
 
 ## 快速启动
 
-要求 Python 3.13，以及一个 OpenAI 兼容 Chat Completion API。
+要求 Python 3.13、PostgreSQL 16 或更高版本，以及一个 OpenAI 兼容 Chat Completion API。完整安装步骤见 [PostgreSQL 安装文档](docs/postgresql-install.md)。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[rag,dev]"
@@ -30,17 +30,37 @@ LLM_BASE_URL=http://127.0.0.1:8001/v1
 LLM_API_KEY=your-key
 LLM_MODEL=qwen-plus
 JWT_SECRET=replace-with-at-least-32-random-characters
-MYSQL_DSN=mysql+asyncmy://agent_ro:agent_ro@127.0.0.1:3306/enterprise_demo?charset=utf8mb4
+POSTGRES_DSN=postgresql+asyncpg://agent_ro:agent_ro@127.0.0.1:5432/enterpriseAgent
 ```
 
-启动演示 MySQL：
+为当前 PowerShell 临时加入 PostgreSQL 命令路径（当前实际安装目录为 `D:\psql\bin`）：
 
 ```powershell
-docker compose up -d mysql
-docker compose ps
+$env:Path += ";D:\psql\bin"
+psql --version
 ```
 
-`docker/mysql/init` 会创建只读账号 `agent_ro`、`v_ai_sales_orders` 和 `v_ai_inventory_snapshots`，并写入演示数据。
+连接管理员数据库：
+
+```powershell
+psql -h 127.0.0.1 -p 5432 -U postgres -d postgres
+```
+
+如果数据库已经创建为 `enterpriseAgent`，直接切换并执行初始化脚本：
+
+```sql
+\c "enterpriseAgent"
+\i D:/python/project/enterpriseAgent/database/postgres/001_schema.sql
+\i D:/python/project/enterpriseAgent/database/postgres/002_seed.sql
+```
+
+也可以通过项目脚本交互式输入管理员密码并完成初始化：
+
+```powershell
+.\scripts\init_postgres.ps1
+```
+
+初始化脚本会创建业务表、只读视图、`agent_ro` 只读账号和演示数据。应用启动时不会自动建表。
 
 首次启动前导入中文知识样例：
 
@@ -98,7 +118,7 @@ OpenAPI 页面位于 `http://127.0.0.1:8000/docs`。
 ### 健康检查
 
 - `GET /health/live`：进程存活。
-- `GET /health/ready`：检查 Embedding、Chroma 和 MySQL，任一失败返回 HTTP 503。
+- `GET /health/ready`：检查 Embedding、Chroma 和 PostgreSQL，任一失败返回 HTTP 503。
 
 ## 测试与评测
 
@@ -130,25 +150,25 @@ OpenAPI 页面位于 `http://127.0.0.1:8000/docs`。
 .\.venv\Scripts\enterprise-agent.exe evaluate --mode real
 ```
 
-真实模式要求 `.env`、MySQL、BGE 和 Chat API 均可用。
+真实模式要求 `.env`、PostgreSQL、BGE 和 Chat API 均可用。
 
-已准备好 MySQL 实例时，可以运行显式集成测试：
+已准备好 PostgreSQL 实例时，可以运行显式集成测试：
 
 ```powershell
-$env:MYSQL_TEST_DSN = "mysql+asyncmy://agent_ro:agent_ro@127.0.0.1:3306/enterprise_demo?charset=utf8mb4"
+$env:POSTGRES_TEST_DSN = "postgresql+asyncpg://agent_ro:agent_ro@127.0.0.1:5432/enterpriseAgent"
 .\.venv\Scripts\python.exe -m pytest -m integration -q
 ```
 
 ## 数据与安全边界
 
-- LLM 不生成 SQL、表名、权限条件或文档 ACL。
+- LLM 不生成 ORM 表达式、表名、权限条件或文档 ACL。
 - DataSkill 只能选择服务端注册的模板，未知参数和越界日期会被拒绝。
 - 部门范围由 JWT 可信 claim 和服务端模板注入，客户端不能自行指定。
 - 知识检索先执行部门、角色、生效时间和激活版本过滤，再做向量检索。
 - 低于 `RETRIEVAL_MIN_SCORE` 的片段不会进入 Answer 上下文。
 - 数据答案由确定性渲染器生成，不经过自由文本数字改写。
 
-外部 MySQL 必须提供字段兼容的只读视图：
+PostgreSQL 必须提供字段兼容的只读视图：
 
 - `v_ai_sales_orders(order_id, order_date, department_id, region, customer_id, product_id, quantity, amount)`
 - `v_ai_inventory_snapshots(snapshot_date, department_id, warehouse_id, product_id, quantity_on_hand, quantity_in_transit)`
@@ -161,10 +181,10 @@ app/
   domain/        公共数据契约与错误类型
   evaluation/    90 条评测集和评测运行器
   graph/         LangGraph 状态与固定工作流
-  infra/         LLM、Embedding、Chroma、MySQL、日志和测试替身
+  infra/         LLM、Embedding、Chroma、PostgreSQL ORM、日志和测试替身
   resources/     演示知识文档
   security/      JWT 签发与验证
   skills/        Router、KnowledgeSkill、DataSkill
-docker/mysql/    容器初始化 Schema、视图和演示数据
+database/postgres/  PostgreSQL Schema、视图、账号和演示数据
 tests/           单元、ACL、API 和评测门禁测试
 ```

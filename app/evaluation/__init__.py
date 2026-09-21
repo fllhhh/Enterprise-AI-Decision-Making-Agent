@@ -1,2 +1,1 @@
-"""Offline evaluation support."""
-
+"""离线评测支持模块。"""

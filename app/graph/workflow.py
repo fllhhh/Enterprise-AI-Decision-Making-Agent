@@ -1,3 +1,5 @@
+"""协调路由、Skill 和 Evidence 校验的 LangGraph 工作流。"""
+
 from __future__ import annotations
 
 import logging
@@ -32,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 
 class AgentWorkflow:
+    """让一次请求通过固定的 v0.1 工作流图。"""
+
     def __init__(
         self,
         *,
@@ -39,12 +43,14 @@ class AgentWorkflow:
         knowledge_skill: KnowledgeSkill,
         data_skill: DataSkill,
     ) -> None:
+        """保存 Skill 依赖，并只编译一次固定工作流图。"""
         self._router = router
         self._knowledge_skill = knowledge_skill
         self._data_skill = data_skill
         self._graph = self._build()
 
     async def run(self, *, request: QueryRequest, principal: Principal) -> QueryResponse:
+        """执行工作流，并将最终状态转换为 API 响应。"""
         run_id = str(uuid.uuid4())
         thread_id = request.thread_id or str(uuid.uuid4())
         trace_id = trace_id_var.get() or str(uuid.uuid4())
@@ -78,6 +84,7 @@ class AgentWorkflow:
         return response
 
     def _build(self):
+        """创建并编译固定工作流拓扑。"""
         graph = StateGraph(AgentState)
         graph.add_node("prepare", self._prepare)
         graph.add_node("route", self._route)
@@ -109,6 +116,7 @@ class AgentWorkflow:
         return graph.compile(checkpointer=MemorySaver())
 
     async def _prepare(self, state: AgentState) -> dict[str, Any]:
+        """重置每轮字段，同时保留会话上下文。"""
         history = list(state.get("history") or [])
         previous_summary = state.get("conversation_summary") or ""
         if not previous_summary and history:
@@ -128,6 +136,7 @@ class AgentWorkflow:
         }
 
     async def _route(self, state: AgentState) -> dict[str, Any]:
+        """执行 Router，并将决策写入 Graph 状态。"""
         decision = await self._router.decide(
             query=state["query"],
             conversation_summary=state.get("conversation_summary", ""),
@@ -139,6 +148,7 @@ class AgentWorkflow:
         }
 
     async def _knowledge(self, state: AgentState) -> dict[str, Any]:
+        """执行文档检索和基于证据回答分支。"""
         principal = Principal.model_validate(state["principal"])
         outcome = await self._knowledge_skill.answer(
             query=state["query"],
@@ -147,6 +157,7 @@ class AgentWorkflow:
         return _outcome_update(outcome)
 
     async def _data(self, state: AgentState) -> dict[str, Any]:
+        """执行白名单数据查询分支。"""
         principal = Principal.model_validate(state["principal"])
         outcome = await self._data_skill.answer(
             query=state["query"],
@@ -155,6 +166,7 @@ class AgentWorkflow:
         return _outcome_update(outcome)
 
     async def _clarify(self, state: AgentState) -> dict[str, Any]:
+        """当路由不明确时，要求用户补充信息。"""
         return {
             "status": RunStatus.CLARIFY.value,
             "answer": "请补充要查询的知识主题、数据指标或明确的时间范围。",
@@ -162,6 +174,7 @@ class AgentWorkflow:
         }
 
     async def _mixed_unsupported(self, state: AgentState) -> dict[str, Any]:
+        """明确拒绝超出 v0.1 范围的 Mixed 请求。"""
         return {
             "status": RunStatus.UNSUPPORTED.value,
             "answer": "v0.1 暂不支持同时执行知识检索和数据查询，请拆分为两个问题。",
@@ -169,6 +182,7 @@ class AgentWorkflow:
         }
 
     async def _validate_evidence(self, state: AgentState) -> dict[str, Any]:
+        """在响应前执行确定性的最低 Evidence 门禁。"""
         if state.get("status") != RunStatus.ANSWERED.value:
             return {}
         evidence = state.get("evidence") or []
@@ -192,6 +206,7 @@ class AgentWorkflow:
         return {}
 
     async def _respond(self, state: AgentState) -> dict[str, Any]:
+        """保存精简会话摘要并准备最终状态。"""
         history = list(state.get("history") or [])
         history.append(
             {
@@ -212,10 +227,12 @@ class AgentWorkflow:
 
 
 def _route_branch(state: AgentState) -> str:
+    """返回 Router 选择的条件下一步节点。"""
     return state.get("route", Route.CLARIFY.value)
 
 
 def _outcome_update(outcome) -> dict[str, Any]:
+    """将 Skill 执行结果转换为 LangGraph 状态补丁。"""
     return {
         "status": outcome.status.value,
         "answer": outcome.answer,
@@ -226,6 +243,7 @@ def _outcome_update(outcome) -> dict[str, Any]:
 
 
 def _summarize_history(history: list[dict[str, Any]]) -> str:
+    """根据最近几轮对话生成简短摘要。"""
     return "\n".join(
         f"用户: {item.get('query', '')}\n助手: {item.get('answer', '')}"
         for item in history[-3:]
@@ -233,6 +251,7 @@ def _summarize_history(history: list[dict[str, Any]]) -> str:
 
 
 def _to_response(state: AgentState) -> QueryResponse:
+    """校验并序列化最终 Graph 状态，供 API 返回。"""
     route = Route(state.get("route", Route.CLARIFY.value))
     status = RunStatus(state.get("status", RunStatus.CLARIFY.value))
     error_code = state.get("error_code")
@@ -258,4 +277,5 @@ def _to_response(state: AgentState) -> QueryResponse:
 
 
 def utc_now_iso() -> str:
+    """返回 ISO-8601 UTC 时间戳，供后续可观测性扩展使用。"""
     return datetime.now(UTC).isoformat()

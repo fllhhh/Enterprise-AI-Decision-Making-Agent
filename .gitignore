@@ -8,4 +8,5 @@ __pycache__/
 data/chroma/
 data/models/
 data/mysql-test/
+data/pytest-tmp*/
 reports/

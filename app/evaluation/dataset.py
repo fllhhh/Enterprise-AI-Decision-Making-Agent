@@ -1,3 +1,5 @@
+"""固定的 v0.1 评测数据集和预期行为。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,6 +12,8 @@ Category = Literal["router", "knowledge", "data", "security"]
 
 @dataclass(frozen=True, slots=True)
 class EvaluationCase:
+    """一个确定性评测场景。"""
+
     case_id: str
     category: Category
     query: str
@@ -22,6 +26,7 @@ class EvaluationCase:
 
 
 def build_v01_cases() -> list[EvaluationCase]:
+    """构建包含 Router、Knowledge、Data 和 Security 的 90 条评测集。"""
     sales = _principal("eval.sales", "sales", ("employee",))
     finance = _principal("eval.finance", "finance", ("employee",))
     operations = _principal("eval.operations", "operations", ("employee",))
@@ -237,6 +242,7 @@ def build_v01_cases() -> list[EvaluationCase]:
 
 
 def _principal(user_id: str, department: str, roles: tuple[str, ...]) -> Principal:
+    """为评测用例创建完整指定的 Principal。"""
     return Principal(
         user_id=user_id,
         department=department,

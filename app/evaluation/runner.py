@@ -1,3 +1,5 @@
+"""用于执行 v0.1 验收门禁的离线评测运行器。"""
+
 from __future__ import annotations
 
 import json
@@ -23,6 +25,8 @@ from app.infra.vector_store import VectorStore
 
 @dataclass(slots=True)
 class CaseResult:
+    """单个评测用例的执行结果。"""
+
     case_id: str
     category: str
     passed: bool
@@ -33,6 +37,8 @@ class CaseResult:
 
 @dataclass(slots=True)
 class EvaluationReport:
+    """一次完整评测的聚合指标和门禁结果。"""
+
     dataset_version: str
     mode: str
     total: int
@@ -48,6 +54,7 @@ async def run_evaluation(
     mode: Literal["fake", "real"] = "fake",
     output_path: Path | None = None,
 ) -> EvaluationReport:
+    """执行全部用例，并可选写入 JSON 报告。"""
     container = await _build_container(mode)
     try:
         await container.ingest_demo_documents()
@@ -80,6 +87,7 @@ async def run_evaluation(
 
 
 async def _build_container(mode: Literal["fake", "real"]) -> AppContainer:
+    """为评测构建确定性替身或真实依赖图。"""
     settings = Settings()
     if mode == "real":
         return AppContainer(settings)
@@ -93,6 +101,7 @@ async def _build_container(mode: Literal["fake", "real"]) -> AppContainer:
 
 
 async def _run_case(container: AppContainer, case: EvaluationCase) -> CaseResult:
+    """执行单个用例，并将结果与预期契约比较。"""
     response = await container.workflow.run(
         request=QueryRequest(query=case.query),
         principal=case.principal,
@@ -160,6 +169,7 @@ def _build_metrics(
     results: list[CaseResult],
     cases: list[EvaluationCase],
 ) -> tuple[dict[str, float], dict[str, bool]]:
+    """根据用例结果计算通过率和验收门禁。"""
     by_id = {case.case_id: case for case in cases}
     router = [item for item in results if item.category == "router"]
     knowledge = [item for item in results if item.category == "knowledge"]
@@ -197,7 +207,7 @@ def _build_metrics(
 
 
 def _ratio(results: list[CaseResult]) -> float:
+    """为空或非空结果集返回安全的成功率。"""
     if not results:
         return 0.0
     return sum(result.passed for result in results) / len(results)
-

@@ -1,3 +1,5 @@
+"""基于 Evidence 的企业文档问答。"""
+
 from __future__ import annotations
 
 from app.domain.models import Evidence, EvidenceKind, Principal, RunStatus
@@ -8,6 +10,8 @@ from app.skills.base import SkillOutcome
 
 
 class KnowledgeSkill:
+    """检索有权访问的文档片段，并只依据这些证据回答。"""
+
     def __init__(
         self,
         *,
@@ -17,6 +21,7 @@ class KnowledgeSkill:
         top_k: int = 5,
         min_score: float = 0.20,
     ) -> None:
+        """保存检索、向量化和答案生成依赖。"""
         self._embedding_provider = embedding_provider
         self._vector_store = vector_store
         self._chat_model = chat_model
@@ -24,6 +29,11 @@ class KnowledgeSkill:
         self._min_score = min_score
 
     async def answer(self, *, query: str, principal: Principal) -> SkillOutcome:
+        """完成一次知识问题的向量化、ACL 过滤、检索和回答。
+
+        检索使用 JWT 中的可信 Principal。系统不会先获取全部文档再过滤，
+        以避免未授权文本进入回答模型。
+        """
         embedding = (await self._embedding_provider.embed([query]))[0]
         hits = await self._vector_store.search(
             query=query,
@@ -33,6 +43,7 @@ class KnowledgeSkill:
         )
         hits = [hit for hit in hits if hit.score >= self._min_score]
         if not hits:
+            # 空结果应触发拒答，而不是让模型使用通用知识补充答案。
             return SkillOutcome(
                 status=RunStatus.CLARIFY,
                 answer="未找到当前身份可访问的相关内部资料，无法回答该问题。",
@@ -59,6 +70,7 @@ class KnowledgeSkill:
 
 
 def _to_evidence(index: int, hit) -> Evidence:
+    """将单条检索结果转换为公共 Evidence 契约。"""
     metadata = dict(hit.metadata)
     return Evidence(
         evidence_id=f"E{index}",
@@ -77,6 +89,7 @@ def _to_evidence(index: int, hit) -> Evidence:
 
 
 def _knowledge_prompt(query: str, evidence: list[Evidence]) -> str:
+    """构造只包含用户问题和已授权证据的 Prompt。"""
     blocks = [
         (
             f"[{item.evidence_id}] 《{item.title}》版本 {item.version} "
@@ -93,6 +106,7 @@ def _knowledge_prompt(query: str, evidence: list[Evidence]) -> str:
 
 
 def _ensure_citations(answer: str, evidence: list[Evidence]) -> str:
+    """确保非空知识回答至少包含一个引用标记。"""
     if any(f"[{item.evidence_id}]" in answer for item in evidence):
         return answer.strip()
     citations = " ".join(f"[{item.evidence_id}]" for item in evidence)

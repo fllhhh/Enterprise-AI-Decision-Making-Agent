@@ -1,2 +1,1 @@
-"""Authentication helpers."""
-
+"""身份认证辅助模块。"""

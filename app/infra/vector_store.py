@@ -1,3 +1,5 @@
+"""向量库适配器和支持 ACL 的文档检索。"""
+
 from __future__ import annotations
 
 import logging
@@ -13,7 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 class VectorStore(Protocol):
-    async def upsert(self, chunks: list[DocumentChunk], embeddings: list[list[float]]) -> None: ...
+    """定义 KnowledgeSkill 使用的存储契约。"""
+
+    async def upsert(self, chunks: list[DocumentChunk], embeddings: list[list[float]]) -> None:
+        """存储或替换文档分块及向量。"""
+        ...
 
     async def search(
         self,
@@ -22,25 +28,37 @@ class VectorStore(Protocol):
         query_embedding: list[float],
         principal: Principal,
         top_k: int,
-    ) -> list[SearchHit]: ...
+    ) -> list[SearchHit]:
+        """只返回该 Principal 可见的文档分块。"""
+        ...
 
-    async def health(self) -> bool: ...
+    async def health(self) -> bool:
+        """返回向量后端是否可访问。"""
+        ...
 
-    async def count(self) -> int: ...
+    async def count(self) -> int:
+        """返回已索引分块数量。"""
+        ...
 
 
 class ChromaVectorStore:
+    """使用元数据前置过滤的持久化 Chroma 实现。"""
+
     def __init__(self, *, path: str, collection_name: str = "knowledge_v1") -> None:
+        """保存持久化路径和集合名称。"""
         self._path = path
         self._collection_name = collection_name
         self._client = None
         self._collection = None
 
     async def upsert(self, chunks: list[DocumentChunk], embeddings: list[list[float]]) -> None:
+        """写入分块，并将同一文档的旧版本标记为失效。"""
         if len(chunks) != len(embeddings):
             raise ValueError("chunks and embeddings must have the same length")
         collection = self._get_collection()
         for chunk in chunks:
+            # 同一 doc_id 可能对应多个分块。写入新版本前，
+            # 先将旧分块全部标记为 inactive。
             existing = collection.get(
                 where={"doc_id": chunk.metadata.doc_id},
                 include=["metadatas"],
@@ -71,6 +89,7 @@ class ChromaVectorStore:
         principal: Principal,
         top_k: int,
     ) -> list[SearchHit]:
+        """只检索指定 Principal 有权访问的文档。"""
         where = _build_acl_filter(principal)
         if where is None:
             return []
@@ -103,6 +122,7 @@ class ChromaVectorStore:
         return hits
 
     async def health(self) -> bool:
+        """检查本地集合是否可读。"""
         try:
             self._get_collection().count()
             return True
@@ -110,12 +130,14 @@ class ChromaVectorStore:
             return False
 
     async def count(self) -> int:
+        """返回已索引分块数量。"""
         try:
             return int(self._get_collection().count())
         except Exception as exc:
             raise DependencyUnavailableError("知识库暂时不可用") from exc
 
     def _get_collection(self):
+        """首次使用时创建持久化客户端和集合。"""
         if self._collection is not None:
             return self._collection
         try:
@@ -137,6 +159,10 @@ class ChromaVectorStore:
 
 
 def _build_acl_filter(principal: Principal, now: datetime | None = None) -> dict[str, Any] | None:
+    """在向量相似度检索前构建 Chroma ``where`` 表达式。
+
+    先执行元数据过滤，避免先召回未授权片段、再在结果中补救过滤。
+    """
     effective_now = (now or datetime.now(UTC)).timestamp()
     acl_alternatives: list[dict[str, Any]] = [{"acl_public": {"$eq": True}}]
     acl_alternatives.append(

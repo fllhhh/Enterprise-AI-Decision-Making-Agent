@@ -26,6 +26,8 @@ app/infra/embeddings.py
 app/infra/fakes.py
 app/infra/llm.py
 app/infra/logging.py
+app/infra/postgres_models.py
+app/infra/postgres_queries.py
 app/infra/vector_store.py
 app/security/__init__.py
 app/security/jwt.py
@@ -47,5 +49,7 @@ tests/test_evaluation.py
 tests/test_jwt.py
 tests/test_knowledge_acl.py
 tests/test_mixed_and_session.py
-tests/test_mysql_integration.py
+tests/test_openai_compatible_client.py
+tests/test_postgres_integration.py
+tests/test_postgres_queries.py
 tests/test_router.py

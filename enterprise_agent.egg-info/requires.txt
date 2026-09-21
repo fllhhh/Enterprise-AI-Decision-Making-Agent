@@ -1,5 +1,4 @@
-asyncmy<1,>=0.2.10
-cryptography<47,>=45
+asyncpg<1,>=0.30
 fastapi<1,>=0.141
 httpx<1,>=0.28
 langgraph<2,>=0.6

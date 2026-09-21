@@ -1,6 +1,6 @@
 # 执行摘要
 
-面向企业级场景，本方案提出一个**基于 LangGraph 的智能 Agent 平台**，同时处理知识问答、经营数据分析与库存风险诊断三类任务。系统通过路由器（Router）将用户查询自动分类为知识型、数据型或混合型，由对应的技能（Skill）链路完成检索、计算和推理，并通过 LangGraph 进行流程编排与状态管理。使用混合检索（Dense+BM25）提升问答质量，Text2SQL 技术查询业务数据库，结合业务规则计算库存风险。平台采用 MCP 规范接入工具，提供 FastAPI HTTP 接口，并注重**可追溯性**（上下文状态、证据收集）、**权限安全**（文档/数据访问控制、SQL 校验）和**工程化**（日志/Trace/SSE、指标监控、离线评测）等特性。本文深入分析需求，提供功能设计建议、接口示例和技术选型对比，并对比了现有开源项目 [Enterprise-Decision-Agent](https://github.com/ccy777/Enterprise-Decision-Agent) 的架构与实现差异。
+面向企业级场景，本方案提出一个**基于 LangGraph 的智能 Agent 平台**，同时处理知识问答、经营数据分析与库存风险诊断三类任务。系统通过路由器（Router）将用户查询自动分类为知识型、数据型或混合型，由对应的技能（Skill）链路完成检索、计算和推理，并通过 LangGraph 进行流程编排与状态管理。使用混合检索（Dense+BM25）提升问答质量，Text2SQL 技术查询业务数据库，结合业务规则计算库存风险。平台采用 MCP 规范接入工具，提供 FastAPI HTTP 接口，并注重**可追溯性**（上下文状态、证据收集）、**权限安全**（文档/数据访问控制、SQL 校验）和**工程化**（日志/Trace/SSE、指标监控、离线评测）等特性。本文深入分析需求，提供功能设计建议、接口示例和技术选型对比。
 
 ## 项目目标与范围
 
@@ -182,7 +182,7 @@ class AgentState(TypedDict):
     "source": "travel_policy.pdf",
     "permission": ["HR", "经理"]
   }
-  ```  
+  ```
 - **向量库选型**：常用选项包括 Chroma、Weaviate、Pinecone 等。下表为对比：
 
   | 向量库       | 优点                          | 缺点                              |
@@ -193,7 +193,7 @@ class AgentState(TypedDict):
   
   *(参考：Chroma适合开发者快速原型，Milvus/Weaviate面向企业级部署)*
 
-- **数据库接入**：业务数据如员工、订单、库存等表需接入关系型数据库（如MySQL、PostgreSQL、SQLServer等），由 `execute_safe_query` 工具访问。应配置只读账号。可考虑使用连接池（asyncpg、SQLAlchemy等）提高并发效率。敏感表可考虑物化视图或中间层对外暴露简化接口。  
+- **数据库接入**：业务数据如员工、订单、库存等表接入 PostgreSQL，由 SQLAlchemy Async ORM 映射只读视图，并使用 `asyncpg` 异步访问。应配置只读账号、连接池、查询超时和行数限制。敏感表通过稳定视图或受控数据服务对外暴露，LLM 不直接生成或执行任意 SQL。  
 - **元数据存储**：向量库需存储检索相关元数据（文档ID、分段位置等）并允许检索时过滤。分段表可以存在 SQL/NoSQL 数据库中或向量库自带的文档存储。对话和状态可使用持久化后端（MongoDB、Redis等），如 LangGraph Checkpointer 默认支持 Redis/Mongo。  
 - **备份策略**：知识库中的原始文档和向量库需定期备份。向量库如Chroma使用PersistentClient可直接备份存储文件；数据库备份可以使用主从复制或定期导出。备份方案需保证在系统故障或数据损坏时可迅速恢复。  
 

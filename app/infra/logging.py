@@ -1,3 +1,5 @@
+"""结构化 JSON 日志和请求 Trace 上下文。"""
+
 from __future__ import annotations
 
 import json
@@ -11,6 +13,8 @@ trace_id_var: ContextVar[str | None] = ContextVar("trace_id", default=None)
 
 
 class JsonFormatter(logging.Formatter):
+    """将日志记录、Trace 和结构化元数据序列化为 JSON。"""
+
     _reserved = {
         "args",
         "asctime",
@@ -38,6 +42,7 @@ class JsonFormatter(logging.Formatter):
     }
 
     def format(self, record: logging.LogRecord) -> str:
+        """合并标准字段、Trace 上下文和结构化附加字段。"""
         payload: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "level": record.levelname,
@@ -54,10 +59,10 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging(level: str) -> None:
+    """为当前进程安装唯一的 JSON 标准输出 Handler。"""
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level.upper())
-

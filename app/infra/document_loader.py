@@ -1,3 +1,5 @@
+"""加载并分块 Markdown、文本和 PDF 文档，用于知识导入。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -10,13 +12,17 @@ from app.domain.errors import ConfigurationError
 
 
 class DocumentLoader:
+    """读取由 catalog 管理的文档目录，并生成稳定分块。"""
+
     def __init__(self, *, chunk_size: int = 600, chunk_overlap: int = 100) -> None:
+        """校验并保存滑动窗口分块配置。"""
         if chunk_overlap >= chunk_size:
             raise ValueError("chunk_overlap must be smaller than chunk_size")
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
     def load(self, path: Path) -> list[DocumentChunk]:
+        """加载 ``catalog.json`` 中引用的全部文件。"""
         catalog_path = path / "catalog.json"
         if not catalog_path.exists():
             raise ConfigurationError(f"演示文档目录缺少 catalog.json: {path}")
@@ -32,6 +38,7 @@ class DocumentLoader:
             else:
                 sections = _load_text_sections(document_path)
             for section_title, section_text in sections:
+                # 保持分块位置稳定，使 Evidence 能定位回准确来源。
                 for index, text in enumerate(
                     _chunk_text(
                         section_text,
@@ -53,6 +60,7 @@ class DocumentLoader:
 
 
 def _metadata_from_dict(filename: str, value: dict) -> DocumentMetadata:
+    """校验目录元数据，并将未知字段保留为扩展信息。"""
     required = {"doc_id", "title", "version", "effective_at"}
     missing = required.difference(value)
     if missing:
@@ -83,6 +91,7 @@ def _metadata_from_dict(filename: str, value: dict) -> DocumentMetadata:
 
 
 def _load_text_sections(path: Path) -> list[tuple[str, str]]:
+    """按标题切分文本或 Markdown 文件。"""
     content = path.read_text(encoding="utf-8").strip()
     matches = list(re.finditer(r"^#{1,6}\s+(.+)$", content, flags=re.MULTILINE))
     if not matches:
@@ -98,6 +107,7 @@ def _load_text_sections(path: Path) -> list[tuple[str, str]]:
 
 
 def _load_pdf_sections(path: Path) -> list[tuple[str, str]]:
+    """逐页提取 PDF 文本。"""
     try:
         from pypdf import PdfReader
     except ImportError as exc:
@@ -114,6 +124,7 @@ def _load_pdf_sections(path: Path) -> list[tuple[str, str]]:
 
 
 def _chunk_text(text: str, *, chunk_size: int, overlap: int) -> list[str]:
+    """尽可能在段落边界进行文本分块。"""
     normalized = re.sub(r"\r\n?", "\n", text).strip()
     if not normalized:
         return []
@@ -139,6 +150,6 @@ def _chunk_text(text: str, *, chunk_size: int, overlap: int) -> list[str]:
 
 
 def _chunk_id(doc_id: str, version: str, locator: str) -> str:
+    """生成确定性分块 ID，保证重复导入幂等。"""
     raw = f"{doc_id}:{version}:{locator}".encode()
     return hashlib.sha1(raw).hexdigest()
-

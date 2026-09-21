@@ -1,3 +1,5 @@
+"""通过白名单 ORM 查询模板执行只读数据查询。"""
+
 from __future__ import annotations
 
 import json
@@ -16,56 +18,26 @@ from app.domain.models import (
 from app.domain.query_templates import ArgumentType, QueryTemplate, TemplateArgument
 from app.infra.database import Database
 from app.infra.llm import ChatModel
+from app.infra.postgres_queries import (
+    build_inventory_balance,
+    build_sales_summary,
+    build_top_products,
+)
 from app.skills.base import SkillOutcome
 
 logger = logging.getLogger(__name__)
 
-_SALES_SUMMARY_SQL = """
-SELECT /*+ MAX_EXECUTION_TIME(3000) */
-       DATE_FORMAT(order_date, '%Y-%m') AS period,
-       SUM(amount) AS total_amount,
-       COUNT(*) AS order_count
-FROM v_ai_sales_orders
-WHERE (:include_all_departments = 1 OR department_id = :department_id)
-  AND order_date BETWEEN :period_start AND :period_end
-GROUP BY DATE_FORMAT(order_date, '%Y-%m')
-ORDER BY period
-LIMIT :row_limit
-""".strip()
-
-_TOP_PRODUCTS_SQL = """
-SELECT /*+ MAX_EXECUTION_TIME(3000) */
-       product_id,
-       SUM(quantity) AS total_quantity,
-       SUM(amount) AS total_amount
-FROM v_ai_sales_orders
-WHERE (:include_all_departments = 1 OR department_id = :department_id)
-  AND order_date BETWEEN :period_start AND :period_end
-GROUP BY product_id
-ORDER BY total_amount DESC
-LIMIT :top_n
-""".strip()
-
-_INVENTORY_BALANCE_SQL = """
-SELECT /*+ MAX_EXECUTION_TIME(3000) */
-       product_id,
-       SUM(quantity_on_hand) AS quantity_on_hand,
-       SUM(quantity_in_transit) AS quantity_in_transit
-FROM v_ai_inventory_snapshots
-WHERE (:include_all_departments = 1 OR department_id = :department_id)
-GROUP BY product_id
-ORDER BY quantity_on_hand DESC
-LIMIT :row_limit
-""".strip()
-
 
 class QueryTemplateRegistry:
+    """持有 Agent 可使用的有限数据能力集合。"""
+
     def __init__(
         self,
         *,
         timeout_seconds: float = 3.0,
         max_rows: int = 200,
     ) -> None:
+        """注册经过审核的模板及其执行限制。"""
         self._templates = {
             template.template_id: template
             for template in (
@@ -73,7 +45,7 @@ class QueryTemplateRegistry:
                     template_id="sales_summary",
                     title="销售汇总",
                     description="按月份汇总指定日期范围内的销售额和订单量",
-                    sql=_SALES_SUMMARY_SQL,
+                    statement_builder=build_sales_summary,
                     arguments=(
                         TemplateArgument(
                             "period_start",
@@ -95,7 +67,7 @@ class QueryTemplateRegistry:
                     template_id="top_products",
                     title="畅销商品",
                     description="按日期范围统计销售额最高的商品",
-                    sql=_TOP_PRODUCTS_SQL,
+                    statement_builder=build_top_products,
                     arguments=(
                         TemplateArgument(
                             "period_start",
@@ -124,7 +96,7 @@ class QueryTemplateRegistry:
                     template_id="inventory_balance",
                     title="库存结余",
                     description="查询当前商品的在库数量和在途数量",
-                    sql=_INVENTORY_BALANCE_SQL,
+                    statement_builder=build_inventory_balance,
                     arguments=(),
                     timeout_seconds=timeout_seconds,
                     max_rows=max_rows,
@@ -133,16 +105,21 @@ class QueryTemplateRegistry:
         }
 
     def get(self, template_id: str) -> QueryTemplate | None:
+        """仅在模板 ID 已注册时返回模板。"""
         return self._templates.get(template_id)
 
     def all(self) -> list[QueryTemplate]:
+        """返回用于评测和 Prompt 生成的模板列表。"""
         return list(self._templates.values())
 
     def prompt_description(self) -> str:
+        """生成不含 SQL 文本、可供 LLM 查看的能力列表。"""
         return "\n".join(template.prompt_description() for template in self.all())
 
 
 class DataSkill:
+    """选择安全查询模板，校验参数并执行查询。"""
+
     def __init__(
         self,
         *,
@@ -151,12 +128,18 @@ class DataSkill:
         database: Database,
         confidence_threshold: float = 0.70,
     ) -> None:
+        """保存模板注册表、数据库适配器和决策阈值。"""
         self._chat_model = chat_model
         self._registry = registry
         self._database = database
         self._confidence_threshold = confidence_threshold
 
     async def answer(self, *, query: str, principal: Principal) -> SkillOutcome:
+        """回答一次数据问题，不接受任意 SQL。
+
+        模型只能提出模板 ID 和参数；服务端负责校验该提议，
+        并根据身份注入数据范围参数。
+        """
         decision = await self._select_template(query)
         if not decision.template_id:
             if decision.confidence < self._confidence_threshold:
@@ -199,6 +182,7 @@ class DataSkill:
         )
 
     async def _select_template(self, query: str) -> TemplateDecision:
+        """使用结构化 JSON 从注册表中选择一个模板。"""
         prompt = (
             "请从以下白名单模板中选择一个最匹配的数据查询模板。\n"
             f"{self._registry.prompt_description()}\n\n"
@@ -226,6 +210,7 @@ class DataSkill:
 
 
 def _rule_template(query: str) -> TemplateDecision | None:
+    """对话模型不可用时使用的兜底意图匹配器。"""
     if any(term in query for term in ("库存", "在库", "在途", "结余")):
         return TemplateDecision(
             template_id="inventory_balance",
@@ -254,6 +239,7 @@ def _validate_arguments(
     template: QueryTemplate,
     raw_arguments: dict[str, Any],
 ) -> dict[str, Any]:
+    """拒绝未知、缺失或越界的模板参数。"""
     allowed_names = {argument.name for argument in template.arguments}
     unexpected = set(raw_arguments).difference(allowed_names)
     if unexpected:
@@ -284,6 +270,7 @@ def _validate_arguments(
 
 
 def _convert_argument(argument: TemplateArgument, value: Any) -> Any:
+    """将单个 JSON 参数转换为模板声明的类型。"""
     if argument.argument_type == ArgumentType.DATE:
         try:
             return date.fromisoformat(str(value))
@@ -302,6 +289,7 @@ def _data_evidence(
     arguments: dict[str, Any],
     rows: list[dict[str, Any]],
 ) -> Evidence:
+    """为已执行模板和返回结果创建可追溯 Evidence。"""
     safe_arguments = {key: str(value) for key, value in arguments.items()}
     excerpt = json.dumps(rows[:5], ensure_ascii=False, default=str)
     return Evidence(
@@ -322,6 +310,8 @@ def _data_evidence(
 
 
 def _render_answer(template_id: str, rows: list[dict[str, Any]]) -> str:
+    """确定性地渲染数据库结果，不让 LLM 改写数字。"""
+
     if not rows:
         return "按当前权限范围和查询条件没有匹配数据。[E1]"
     if template_id == "sales_summary":
@@ -352,6 +342,7 @@ def _render_answer(template_id: str, rows: list[dict[str, Any]]) -> str:
 
 
 def _clarify(message: str, code: str) -> SkillOutcome:
+    """为非法或不完整请求构造安全澄清结果。"""
     return SkillOutcome(
         status=RunStatus.CLARIFY,
         answer=message,

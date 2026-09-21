@@ -1,3 +1,5 @@
+"""用于知识导入、Token 签发和评测的命令行操作。"""
+
 from __future__ import annotations
 
 import argparse
@@ -12,6 +14,7 @@ from app.security.jwt import JWTManager
 
 
 def main() -> None:
+    """解析命令行参数并分发一个受支持命令。"""
     parser = argparse.ArgumentParser(prog="enterprise-agent")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -68,6 +71,7 @@ def main() -> None:
 
 
 async def _ingest_demo(path: Path | None) -> None:
+    """对配置的演示文档目录执行向量化并建立索引。"""
     settings = Settings()
     if path is not None:
         settings = settings.model_copy(update={"demo_docs_path": path})
@@ -80,6 +84,7 @@ async def _ingest_demo(path: Path | None) -> None:
 
 
 def _issue_token(args: argparse.Namespace) -> None:
+    """使用指定身份 claims 创建本地开发 JWT。"""
     settings = Settings()
     manager = JWTManager(settings)
     token, expires_at = manager.issue(
@@ -101,4 +106,3 @@ def _issue_token(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     main()
-

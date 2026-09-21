@@ -9,8 +9,7 @@ description = "Trusted vertical slice for an enterprise decision Agent platform"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "asyncmy>=0.2.10,<1",
-    "cryptography>=45,<47",
+    "asyncpg>=0.30,<1",
     "fastapi>=0.141,<1",
     "httpx>=0.28,<1",
     "langgraph>=0.6,<2",
@@ -43,7 +42,7 @@ addopts = "-q"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
-    "integration: requires an external service such as MySQL",
+    "integration: requires an external service such as PostgreSQL",
 ]
 
 [tool.ruff]

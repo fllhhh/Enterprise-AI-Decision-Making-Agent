@@ -1,3 +1,5 @@
+"""健康检查和 Agent 查询的 HTTP 路由。"""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,6 +18,7 @@ router = APIRouter()
 
 @router.get("/", include_in_schema=False)
 async def root() -> dict[str, str]:
+    """返回轻量服务描述，不启动 Agent 工作流。"""
     return {
         "service": "enterprise-agent",
         "version": "0.1.0",
@@ -25,11 +28,13 @@ async def root() -> dict[str, str]:
 
 @router.get("/health/live", response_model=HealthResponse, tags=["health"])
 async def live() -> HealthResponse:
+    """报告进程存活状态，不检查外部依赖。"""
     return HealthResponse(status="ok")
 
 
 @router.get("/health/ready", response_model=HealthResponse, tags=["health"])
 async def ready(container: AppContainer = Depends(get_container)) -> HealthResponse:
+    """报告 Embedding、向量库和 PostgreSQL 是否可用。"""
     checks = await container.readiness()
     if not all(checks.values()):
         raise HTTPException(
@@ -53,5 +58,5 @@ async def query(
     principal: Principal = Depends(get_principal),
     container: AppContainer = Depends(get_container),
 ) -> QueryResponse:
+    """校验身份并执行一次 Agent 工作流。"""
     return await container.workflow.run(request=payload, principal=principal)
-

@@ -1,3 +1,5 @@
+"""测试和离线评测使用的确定性内存适配器。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -13,16 +15,22 @@ from app.domain.query_templates import QueryTemplate
 
 
 class FakeEmbeddingProvider:
+    """无需下载模型的哈希确定性向量。"""
+
     def __init__(self, dimension: int = 128) -> None:
+        """创建确定性的特征哈希向量空间。"""
         self.dimension = dimension
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
+        """为输入文本创建归一化特征哈希向量。"""
         return [self._embed_one(text) for text in texts]
 
     async def health(self) -> bool:
+        """替身不依赖外部服务，因此始终返回可用。"""
         return True
 
     def _embed_one(self, text: str) -> list[float]:
+        """将文本转换为归一化的确定性特征哈希向量。"""
         vector = [0.0] * self.dimension
         tokens = _tokens(text)
         for token in tokens:
@@ -35,10 +43,14 @@ class FakeEmbeddingProvider:
 
 
 class InMemoryVectorStore:
+    """模拟真实向量库 ACL 语义的小型内存实现。"""
+
     def __init__(self) -> None:
+        """初始化空的内存分块集合。"""
         self._records: dict[str, tuple[str, dict[str, Any]]] = {}
 
     async def upsert(self, chunks: list[DocumentChunk], embeddings: list[list[float]]) -> None:
+        """存储分块，并停用同一文档的旧分块。"""
         doc_ids = {chunk.metadata.doc_id for chunk in chunks}
         for chunk_id, (text, metadata) in list(self._records.items()):
             if metadata.get("doc_id") in doc_ids:
@@ -56,6 +68,7 @@ class InMemoryVectorStore:
         principal: Principal,
         top_k: int,
     ) -> list[SearchHit]:
+        """只检索该 Principal 可见的分块。"""
         now = datetime.now(UTC).timestamp()
         hits: list[SearchHit] = []
         for chunk_id, (text, metadata) in self._records.items():
@@ -82,19 +95,24 @@ class InMemoryVectorStore:
         return hits[:top_k]
 
     async def health(self) -> bool:
+        """内存存储不依赖外部服务，因此始终返回可用。"""
         return True
 
     async def count(self) -> int:
+        """返回已存储分块数量。"""
         return len(self._records)
 
 
 class FakeDatabase:
+    """为三个已注册查询模板返回稳定结果。"""
+
     async def execute_template(
         self,
         template: QueryTemplate,
         arguments: dict[str, Any],
         principal: Principal,
     ) -> list[dict[str, Any]]:
+        """根据已注册模板 ID 返回固定结果。"""
         if template.template_id == "sales_summary":
             return [
                 {"period": "2026-07", "total_amount": 128000.0, "order_count": 32},
@@ -129,23 +147,29 @@ class FakeDatabase:
         return []
 
     async def health(self) -> bool:
+        """替身不依赖外部服务，因此始终返回可用。"""
         return True
 
     async def close(self) -> None:
+        """提供与真实数据库一致的空关闭钩子。"""
         return None
 
 
 class FakeChatModel:
+    """用于本地测试的可编排、确定性启发式对话模型。"""
+
     def __init__(
         self,
         *,
         text_responses: list[str] | None = None,
         json_responses: list[dict[str, Any]] | None = None,
     ) -> None:
+        """初始化可选的确定性响应队列。"""
         self.text_responses = list(text_responses or [])
         self.json_responses = list(json_responses or [])
 
     async def generate_text(self, prompt: str, *, system_prompt: str | None = None) -> str:
+        """返回预置答案或确定性的证据型回答。"""
         if self.text_responses:
             return self.text_responses.pop(0)
         return "根据当前可用企业资料，问题已有对应依据 [E1]。"
@@ -156,12 +180,14 @@ class FakeChatModel:
         *,
         system_prompt: str | None = None,
     ) -> dict[str, Any]:
+        """返回预置 JSON，或根据 Prompt 推断路由和模板。"""
         if self.json_responses:
             return self.json_responses.pop(0)
         return _fake_json_for_prompt(prompt)
 
 
 def _fake_json_for_prompt(prompt: str) -> dict[str, Any]:
+    """提供与真实 Prompt 契约一致的本地 JSON 行为。"""
     if "分类为以下 route" in prompt:
         query = _prompt_tail(prompt, "用户问题：")
         route = _fake_route(query)
@@ -173,6 +199,7 @@ def _fake_json_for_prompt(prompt: str) -> dict[str, Any]:
 
 
 def _fake_route(query: str) -> str:
+    """只供确定性测试使用的小型关键词路由器。"""
     knowledge = any(
         term in query
         for term in (
@@ -247,6 +274,7 @@ def _fake_route(query: str) -> str:
 
 
 def _fake_template_decision(query: str) -> dict[str, Any]:
+    """为离线评测提取常见日期和模板模式。"""
     if any(term in query for term in ("库存", "在库", "在途", "结余")):
         return {
             "template_id": "inventory_balance",
@@ -290,10 +318,12 @@ def _fake_template_decision(query: str) -> dict[str, Any]:
 
 
 def _prompt_tail(prompt: str, marker: str) -> str:
+    """返回 Prompt 中最后一个标记之后的文本。"""
     return prompt.rsplit(marker, maxsplit=1)[-1].strip()
 
 
 def _tokens(text: str) -> list[str]:
+    """将中文拆成字符和双字词，用于本地评分。"""
     compact = re.sub(r"\s+", "", text)
     tokens = list(compact)
     tokens.extend(compact[index : index + 2] for index in range(max(0, len(compact) - 1)))
@@ -301,6 +331,7 @@ def _tokens(text: str) -> list[str]:
 
 
 def _lexical_similarity(left: str, right: str) -> float:
+    """为替身向量库计算确定性的词法重叠分数。"""
     left_tokens = set(_tokens(left))
     right_tokens = set(_tokens(right))
     if not left_tokens or not right_tokens:
@@ -311,6 +342,7 @@ def _lexical_similarity(left: str, right: str) -> float:
 
 
 def _is_visible(metadata: dict[str, Any], principal: Principal, now: float) -> bool:
+    """应用与 Chroma 相同的 active、effective 和 ACL 规则。"""
     if not metadata.get("is_active"):
         return False
     if float(metadata.get("effective_ts", 0.0)) > now:

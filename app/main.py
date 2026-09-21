@@ -1,3 +1,5 @@
+"""应用工厂、异常映射和 Trace 中间件。"""
+
 from __future__ import annotations
 
 import logging
@@ -28,12 +30,14 @@ def create_app(
     settings: Settings | None = None,
     container: AppContainer | None = None,
 ) -> FastAPI:
+    """构建支持注入配置和依赖的 FastAPI 应用。"""
     app_settings = settings or Settings()
     configure_logging(app_settings.log_level)
     app_container = container or AppContainer(app_settings)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        """管理应用启动和关闭时的资源生命周期。"""
         await app_container.startup()
         try:
             yield
@@ -55,6 +59,7 @@ def create_app(
         request: Request,
         exc: AuthenticationError,
     ) -> JSONResponse:
+        """将无效身份映射为 HTTP 401。"""
         return JSONResponse(
             status_code=401,
             content={"detail": {"code": exc.code, "message": exc.message}},
@@ -66,6 +71,7 @@ def create_app(
         request: Request,
         exc: DependencyUnavailableError,
     ) -> JSONResponse:
+        """将模型、向量库或数据库不可用映射为 HTTP 503。"""
         return JSONResponse(
             status_code=503,
             content={"detail": {"code": exc.code, "message": exc.message}},
@@ -76,6 +82,7 @@ def create_app(
         request: Request,
         exc: QueryTimeoutError,
     ) -> JSONResponse:
+        """将数据查询超时映射为 HTTP 504。"""
         return JSONResponse(
             status_code=504,
             content={"detail": {"code": exc.code, "message": exc.message}},
@@ -86,6 +93,7 @@ def create_app(
         request: Request,
         exc: QueryExecutionError,
     ) -> JSONResponse:
+        """将已验证查询的执行失败映射为 HTTP 502。"""
         return JSONResponse(
             status_code=502,
             content={"detail": {"code": exc.code, "message": exc.message}},
@@ -93,6 +101,7 @@ def create_app(
 
     @application.exception_handler(AgentError)
     async def agent_error_handler(request: Request, exc: AgentError) -> JSONResponse:
+        """为其他可预期失败返回稳定的领域错误码。"""
         return JSONResponse(
             status_code=400,
             content={"detail": {"code": exc.code, "message": exc.message}},
@@ -100,6 +109,7 @@ def create_app(
 
     @application.exception_handler(Exception)
     async def unknown_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        """记录未知异常，同时避免向客户端泄露实现细节。"""
         logger.exception("unhandled_request_error")
         return JSONResponse(
             status_code=500,
@@ -110,10 +120,14 @@ def create_app(
 
 
 class _TraceMiddleware:
+    """为日志上下文和 HTTP 响应附加安全的 trace_id。"""
+
     def __init__(self, app) -> None:
+        """保存被包装的 ASGI 应用。"""
         self.app = app
 
     async def __call__(self, scope, receive, send) -> None:
+        """处理 HTTP 请求，并保留调用方传入的合法 trace_id。"""
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -123,6 +137,7 @@ class _TraceMiddleware:
         token = trace_id_var.set(trace_id)
 
         async def send_with_trace(message) -> None:
+            """在响应开始时写入 Trace 响应头。"""
             if message["type"] == "http.response.start":
                 response_headers = list(message.get("headers", []))
                 response_headers = [
@@ -141,6 +156,7 @@ class _TraceMiddleware:
 
 
 def _safe_trace_id(value: str) -> str:
+    """接受长度受限的安全 ID，否则生成 UUID。"""
     if value and len(value) <= 128 and all(character.isalnum() or character in "-_." for character in value):
         return value
     return str(uuid.uuid4())
