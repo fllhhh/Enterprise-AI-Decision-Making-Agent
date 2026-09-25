@@ -46,6 +46,18 @@ class QueryExecutionError(AgentError):
     code = "QUERY_EXECUTION_FAILED"
 
 
+class UnsafeSqlError(AgentError):
+    """SQLGlot 校验未通过时抛出。"""
+
+    code = "UNSAFE_SQL"
+
+
+class PermissionDeniedError(AgentError):
+    """身份无权访问文档或数据范围时抛出。"""
+
+    code = "PERMISSION_DENIED"
+
+
 class MissingSlotError(AgentError):
     """数据模板缺少必要参数时抛出。"""
 

@@ -6,9 +6,11 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.config import Settings
@@ -46,12 +48,19 @@ def create_app(
 
     application = FastAPI(
         title="Enterprise Decision Agent",
-        version="0.1.0",
-        description="v0.1 可信纵向切片",
+        version="0.2.0",
+        description="v0.2 Hybrid RAG 和受控数据查询",
         lifespan=lifespan,
     )
     application.state.container = app_container
     application.include_router(router)
+    frontend_path = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    if frontend_path.exists():
+        application.mount(
+            "/ui",
+            StaticFiles(directory=frontend_path, html=True),
+            name="frontend",
+        )
     application.add_middleware(_TraceMiddleware)
 
     @application.exception_handler(AuthenticationError)

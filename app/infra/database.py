@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -23,6 +24,8 @@ from app.domain.errors import (
 )
 from app.domain.models import Principal
 from app.domain.query_templates import QueryTemplate
+from app.infra.schema_catalog import SchemaCatalog
+from app.infra.sql_guard import SqlGuard, SqlPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +54,19 @@ class Database(Protocol):
 class PostgresDatabase:
     """通过 SQLAlchemy ORM 和 asyncpg 执行白名单查询模板。"""
 
-    def __init__(self, *, dsn: str, default_max_rows: int = 200) -> None:
+    def __init__(
+        self,
+        *,
+        dsn: str,
+        default_max_rows: int = 200,
+        schema_catalog: SchemaCatalog | None = None,
+        sql_guard: SqlGuard | None = None,
+    ) -> None:
         """保存连接配置并延迟创建 Engine。"""
         self._dsn = dsn
         self._default_max_rows = default_max_rows
+        self._schema_catalog = schema_catalog or SchemaCatalog()
+        self._sql_guard = sql_guard or SqlGuard()
         self._engine: AsyncEngine | None = None
         self._session_factory: async_sessionmaker[AsyncSession] | None = None
 
@@ -74,6 +86,18 @@ class PostgresDatabase:
         try:
             async with asyncio.timeout(template.timeout_seconds):
                 statement = template.statement_builder(parameters)
+                if self._schema_catalog is not None:
+                    compiled = statement.compile(
+                        dialect=postgresql.dialect(),
+                        compile_kwargs={"literal_binds": True},
+                    )
+                    self._sql_guard.validate(
+                        str(compiled),
+                        policy=SqlPolicy.from_catalog(
+                            self._schema_catalog,
+                            max_rows=template.max_rows or self._default_max_rows,
+                        ),
+                    )
                 async with self._get_session_factory()() as session:
                     result = await session.execute(statement)
                     rows = result.mappings().fetchmany(template.max_rows)

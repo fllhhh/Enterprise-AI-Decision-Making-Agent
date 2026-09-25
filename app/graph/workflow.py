@@ -6,6 +6,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from time import perf_counter
+from collections.abc import AsyncIterator
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 class AgentWorkflow:
-    """让一次请求通过固定的 v0.1 工作流图。"""
+    """让一次请求通过固定的可信决策工作流图。"""
 
     def __init__(
         self,
@@ -82,6 +83,97 @@ class AgentWorkflow:
             },
         )
         return response
+
+    async def stream(
+        self,
+        *,
+        request: QueryRequest,
+        principal: Principal,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """流式执行工作流，产出前端可消费的事件对象。"""
+        run_id = str(uuid.uuid4())
+        thread_id = request.thread_id or str(uuid.uuid4())
+        trace_id = trace_id_var.get() or str(uuid.uuid4())
+        started = perf_counter()
+        initial: AgentState = {
+            "query": request.query.strip(),
+            "principal": principal.model_dump(),
+            "run_id": run_id,
+            "trace_id": trace_id,
+            "thread_id": thread_id,
+        }
+        yield _event(
+            "run_started",
+            run_id,
+            trace_id,
+            thread_id,
+            {"query": request.query.strip(), "user_id": principal.user_id},
+        )
+        config = {"configurable": {"thread_id": thread_id}}
+        try:
+            async for update in self._graph.astream(
+                initial,
+                config=config,
+                stream_mode="updates",
+            ):
+                for node_name, patch in update.items():
+                    if node_name == "knowledge":
+                        yield _event(
+                            "retrieval_started",
+                            run_id,
+                            trace_id,
+                            thread_id,
+                            {},
+                        )
+                    for event_type, payload in _events_for_node(node_name, patch):
+                        yield _event(
+                            event_type,
+                            run_id,
+                            trace_id,
+                            thread_id,
+                            payload,
+                        )
+                    if node_name == "knowledge":
+                        yield _event(
+                            "retrieval_completed",
+                            run_id,
+                            trace_id,
+                            thread_id,
+                            {"hit_count": (patch.get("metadata") or {}).get("hit_count", 0)},
+                        )
+
+            final_state = await self._graph.aget_state(config)
+            response = _to_response(final_state.values)
+            yield _event(
+                "completed",
+                run_id,
+                trace_id,
+                thread_id,
+                response.model_dump(mode="json"),
+            )
+            logger.info(
+                "agent_stream_completed",
+                extra={
+                    "run_id": run_id,
+                    "thread_id": thread_id,
+                    "user_id": principal.user_id,
+                    "route": response.route.value,
+                    "status": response.status.value,
+                    "duration_ms": round((perf_counter() - started) * 1000, 2),
+                },
+            )
+        except Exception as exc:
+            logger.exception(
+                "agent_stream_failed",
+                extra={"run_id": run_id, "error_type": type(exc).__name__},
+            )
+            yield _event(
+                "error",
+                run_id,
+                trace_id,
+                thread_id,
+                {"code": "INTERNAL_ERROR", "message": "服务内部错误"},
+            )
 
     def _build(self):
         """创建并编译固定工作流拓扑。"""
@@ -174,10 +266,10 @@ class AgentWorkflow:
         }
 
     async def _mixed_unsupported(self, state: AgentState) -> dict[str, Any]:
-        """明确拒绝超出 v0.1 范围的 Mixed 请求。"""
+        """明确拒绝超出当前版本范围的 Mixed 请求。"""
         return {
             "status": RunStatus.UNSUPPORTED.value,
-            "answer": "v0.1 暂不支持同时执行知识检索和数据查询，请拆分为两个问题。",
+            "answer": "当前版本暂不支持同时执行知识检索和数据查询，请拆分为两个问题。",
             "error_code": "MIXED_NOT_SUPPORTED",
         }
 
@@ -240,6 +332,83 @@ def _outcome_update(outcome) -> dict[str, Any]:
         "error_code": outcome.error_code,
         "metadata": outcome.metadata,
     }
+
+
+def _event(
+    event_type: str,
+    run_id: str,
+    trace_id: str,
+    thread_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """构造统一的 SSE 事件对象。"""
+    return {
+        "event": event_type,
+        "run_id": run_id,
+        "trace_id": trace_id,
+        "thread_id": thread_id,
+        "payload": payload,
+    }
+
+
+def _events_for_node(
+    node_name: str,
+    patch: dict[str, Any],
+) -> list[tuple[str, dict[str, Any]]]:
+    """把节点状态补丁映射为流式事件。"""
+    if not isinstance(patch, dict):
+        return []
+    if node_name == "route":
+        return [
+            (
+                "route",
+                {
+                    "route": patch.get("route"),
+                    "confidence": patch.get("route_confidence"),
+                    "reason": patch.get("route_reason"),
+                },
+            )
+        ]
+    if node_name in {"knowledge", "data", "clarify", "mixed_unsupported"}:
+        events: list[tuple[str, dict[str, Any]]] = []
+        if node_name == "data":
+            events.append(
+                (
+                    "sql_validated",
+                    {
+                        "template_id": (patch.get("metadata") or {}).get(
+                            "template_id"
+                        ),
+                    },
+                )
+            )
+        evidence = patch.get("evidence")
+        if evidence:
+            events.append(("evidence", {"evidence": evidence}))
+        if patch.get("answer"):
+            events.append(
+                (
+                    "answer",
+                    {
+                        "status": patch.get("status"),
+                        "answer": patch.get("answer"),
+                        "error_code": patch.get("error_code"),
+                    },
+                )
+            )
+        return events
+    if node_name == "validate_evidence" and patch.get("answer"):
+        return [
+            (
+                "answer",
+                {
+                    "status": patch.get("status"),
+                    "answer": patch.get("answer"),
+                    "error_code": patch.get("error_code"),
+                },
+            )
+        ]
+    return []
 
 
 def _summarize_history(history: list[dict[str, Any]]) -> str:

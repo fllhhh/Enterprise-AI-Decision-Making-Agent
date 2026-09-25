@@ -1,4 +1,4 @@
-"""本地 HS256 JWT 签发与校验，专用于 v0.1。"""
+"""本地 HS256 JWT 签发与校验，专用于当前开发阶段。"""
 
 from __future__ import annotations
 

@@ -67,12 +67,15 @@ class InMemoryVectorStore:
         query_embedding: list[float],
         principal: Principal,
         top_k: int,
+        allowed_doc_ids: set[str] | None = None,
     ) -> list[SearchHit]:
         """只检索该 Principal 可见的分块。"""
         now = datetime.now(UTC).timestamp()
         hits: list[SearchHit] = []
         for chunk_id, (text, metadata) in self._records.items():
             if not _is_visible(metadata, principal, now):
+                continue
+            if allowed_doc_ids is not None and metadata.get("doc_id") not in allowed_doc_ids:
                 continue
             embedding = metadata.get("_embedding", [])
             vector_score = sum(

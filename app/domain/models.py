@@ -145,3 +145,27 @@ class HealthResponse(BaseModel):
 
     status: str
     checks: dict[str, bool] = Field(default_factory=dict)
+
+
+class FeedbackRequest(BaseModel):
+    """用户对一次运行的评分和可选评论。"""
+
+    run_id: str = Field(min_length=1, max_length=128)
+    thread_id: str = Field(min_length=1, max_length=128)
+    rating: int | None = Field(default=None, ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class ThreadEvent(BaseModel):
+    """持久化的流式会话事件。"""
+
+    event_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+class ThreadHistoryResponse(BaseModel):
+    """按时间顺序返回的会话历史。"""
+
+    thread_id: str
+    events: list[ThreadEvent] = Field(default_factory=list)

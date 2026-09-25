@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "enterprise-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Trusted vertical slice for an enterprise decision Agent platform"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -16,6 +16,8 @@ dependencies = [
     "pydantic>=2.13,<3",
     "pydantic-settings>=2.12,<3",
     "PyJWT>=2.10,<3",
+    "rank-bm25>=0.2.2,<1",
+    "sqlglot>=27,<29",
     "SQLAlchemy>=2.0,<3",
     "uvicorn[standard]>=0.52,<1",
 ]

@@ -41,6 +41,7 @@ class QueryTemplate:
     description: str
     statement_builder: StatementBuilder
     arguments: tuple[TemplateArgument, ...]
+    view_name: str = ""
     max_rows: int = 200
     timeout_seconds: float = 3.0
 

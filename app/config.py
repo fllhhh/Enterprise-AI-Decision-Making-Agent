@@ -44,10 +44,11 @@ class Settings(BaseSettings):
     postgres_dsn: SecretStr = SecretStr(
         "postgresql+asyncpg://agent_ro:agent_ro@127.0.0.1:5432/enterpriseAgent"
     )
+    app_db_dsn: SecretStr | None = None
     sql_timeout_seconds: float = 3.0
     sql_max_rows: int = Field(default=200, ge=1, le=1000)
 
-    # 本地 JWT 签发者和受众。HS256 仅用于 v0.1。
+    # 本地 JWT 签发者和受众。HS256 仅用于当前开发阶段。
     jwt_secret: SecretStr = SecretStr(
         "replace-with-at-least-32-random-characters"
     )
@@ -64,6 +65,16 @@ class Settings(BaseSettings):
     chunk_size: int = Field(default=600, ge=100, le=3000)
     chunk_overlap: int = Field(default=100, ge=0, le=1000)
     retrieval_min_score: float = Field(default=0.20, ge=0.0, le=1.0)
+
+    # Hybrid RAG 配置。BM25 始终由容器创建，Reranker 默认可选关闭，
+    # 使 fake 测试和低资源环境不需要加载第二个模型。
+    bm25_k1: float = Field(default=1.5, gt=0.0)
+    bm25_b: float = Field(default=0.75, ge=0.0, le=1.0)
+    rrf_k: float = Field(default=60.0, gt=0.0)
+    reranker_enabled: bool = False
+    reranker_model: str = "BAAI/bge-reranker-base"
+    reranker_device: str = "cpu"
+    query_rewriter_enabled: bool = False
 
     @field_validator("chunk_overlap")
     @classmethod

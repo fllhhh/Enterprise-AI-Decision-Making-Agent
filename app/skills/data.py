@@ -18,6 +18,7 @@ from app.domain.models import (
 from app.domain.query_templates import ArgumentType, QueryTemplate, TemplateArgument
 from app.infra.database import Database
 from app.infra.llm import ChatModel
+from app.infra.permissions import PermissionService
 from app.infra.postgres_queries import (
     build_inventory_balance,
     build_sales_summary,
@@ -46,6 +47,7 @@ class QueryTemplateRegistry:
                     title="销售汇总",
                     description="按月份汇总指定日期范围内的销售额和订单量",
                     statement_builder=build_sales_summary,
+                    view_name="v_ai_sales_orders",
                     arguments=(
                         TemplateArgument(
                             "period_start",
@@ -68,6 +70,7 @@ class QueryTemplateRegistry:
                     title="畅销商品",
                     description="按日期范围统计销售额最高的商品",
                     statement_builder=build_top_products,
+                    view_name="v_ai_sales_orders",
                     arguments=(
                         TemplateArgument(
                             "period_start",
@@ -97,6 +100,7 @@ class QueryTemplateRegistry:
                     title="库存结余",
                     description="查询当前商品的在库数量和在途数量",
                     statement_builder=build_inventory_balance,
+                    view_name="v_ai_inventory_snapshots",
                     arguments=(),
                     timeout_seconds=timeout_seconds,
                     max_rows=max_rows,
@@ -126,12 +130,14 @@ class DataSkill:
         chat_model: ChatModel,
         registry: QueryTemplateRegistry,
         database: Database,
+        permission_service: PermissionService,
         confidence_threshold: float = 0.70,
     ) -> None:
         """保存模板注册表、数据库适配器和决策阈值。"""
         self._chat_model = chat_model
         self._registry = registry
         self._database = database
+        self._permission_service = permission_service
         self._confidence_threshold = confidence_threshold
 
     async def answer(self, *, query: str, principal: Principal) -> SkillOutcome:
@@ -156,6 +162,16 @@ class DataSkill:
                     "LOW_CONFIDENCE",
                 )
             return _clarify("请求的数据指标不在当前白名单内。", "TEMPLATE_NOT_FOUND")
+
+        await self._permission_service.assert_template_allowed(
+            principal,
+            template.template_id,
+        )
+        if template.view_name:
+            await self._permission_service.assert_view_allowed(
+                principal,
+                template.view_name,
+            )
 
         try:
             arguments = _validate_arguments(template, decision.arguments)
@@ -297,7 +313,7 @@ def _data_evidence(
         kind=EvidenceKind.DATA,
         source_id=template.template_id,
         title=template.title,
-        version="v0.1",
+        version="v0.2",
         locator=f"template={template.template_id}",
         excerpt=excerpt,
         score=1.0,

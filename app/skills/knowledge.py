@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from app.domain.models import Evidence, EvidenceKind, Principal, RunStatus
-from app.infra.embeddings import EmbeddingProvider
+from app.infra.retrieval import HybridRetriever
 from app.infra.llm import ChatModel
-from app.infra.vector_store import VectorStore
 from app.skills.base import SkillOutcome
 
 
@@ -15,15 +14,13 @@ class KnowledgeSkill:
     def __init__(
         self,
         *,
-        embedding_provider: EmbeddingProvider,
-        vector_store: VectorStore,
+        hybrid_retriever: HybridRetriever,
         chat_model: ChatModel,
         top_k: int = 5,
         min_score: float = 0.20,
     ) -> None:
-        """保存检索、向量化和答案生成依赖。"""
-        self._embedding_provider = embedding_provider
-        self._vector_store = vector_store
+        """保存混合检索和答案生成依赖。"""
+        self._hybrid_retriever = hybrid_retriever
         self._chat_model = chat_model
         self._top_k = top_k
         self._min_score = min_score
@@ -34,10 +31,8 @@ class KnowledgeSkill:
         检索使用 JWT 中的可信 Principal。系统不会先获取全部文档再过滤，
         以避免未授权文本进入回答模型。
         """
-        embedding = (await self._embedding_provider.embed([query]))[0]
-        hits = await self._vector_store.search(
+        hits = await self._hybrid_retriever.search(
             query=query,
-            query_embedding=embedding,
             principal=principal,
             top_k=self._top_k,
         )

@@ -28,6 +28,7 @@ class VectorStore(Protocol):
         query_embedding: list[float],
         principal: Principal,
         top_k: int,
+        allowed_doc_ids: set[str] | None = None,
     ) -> list[SearchHit]:
         """只返回该 Principal 可见的文档分块。"""
         ...
@@ -88,11 +89,17 @@ class ChromaVectorStore:
         query_embedding: list[float],
         principal: Principal,
         top_k: int,
+        allowed_doc_ids: set[str] | None = None,
     ) -> list[SearchHit]:
         """只检索指定 Principal 有权访问的文档。"""
         where = _build_acl_filter(principal)
         if where is None:
             return []
+        if allowed_doc_ids is not None:
+            if not allowed_doc_ids:
+                return []
+            doc_filter = {"doc_id": {"$in": sorted(allowed_doc_ids)}}
+            where = {"$and": [where, doc_filter]}
         try:
             result = self._get_collection().query(
                 query_embeddings=[query_embedding],

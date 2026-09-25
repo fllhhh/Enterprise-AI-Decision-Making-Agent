@@ -10,3 +10,8 @@ data/models/
 data/mysql-test/
 data/pytest-tmp*/
 reports/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+deep-research-report.md
+企业智能决策 Agent 平台执行方案.修订版.md

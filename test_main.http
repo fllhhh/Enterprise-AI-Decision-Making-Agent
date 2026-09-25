@@ -1,7 +1,7 @@
 # 令牌过期后重新签发：
 # .\.venv\Scripts\enterprise-agent.exe issue-token --user demo.sales --department sales --roles employee
 # 注意：必须用当前 .env 里同一个 JWT_SECRET 签发（在项目根目录执行）
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkZW1vLnNhbGVzIiwiZGVwYXJ0bWVudCI6InNhbGVzIiwicm9sZXMiOlsiZW1wbG95ZWUiXSwiaXNzIjoiZW50ZXJwcmlzZS1hZ2VudC1sb2NhbCIsImF1ZCI6ImVudGVycHJpc2UtYWdlbnQtYXBpIiwiaWF0IjoxNzg5OTU4MDQxLCJleHAiOjE3OTAwNDQ0NDF9.GyVsLxfpGyPIiXfJASm6mUGkCRVOqxLIlQb-m-31R-o
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkZW1vLnNhbGVzIiwiZGVwYXJ0bWVudCI6InNhbGVzIiwicm9sZXMiOlsiZW1wbG95ZWUiXSwiaXNzIjoiZW50ZXJwcmlzZS1hZ2VudC1sb2NhbCIsImF1ZCI6ImVudGVycHJpc2UtYWdlbnQtYXBpIiwiaWF0IjoxNzkwMDAzMzEwLCJleHAiOjE3OTAwODk3MTB9.IrDX3dZIVPTmWq5hGl02P2Kvv8M2A3jm6lElkSWuFBg
 
 GET http://127.0.0.1:8000/health/live
 Accept: application/json
@@ -30,7 +30,18 @@ Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "query": "统计2026年7月销售额",
+  "query": "查询2026年7月1日至2026年7月31日的销售汇总",
+  "thread_id": "example-thread"
+}
+
+###
+
+POST http://127.0.0.1:8000/api/v1/query
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "query": "统计销售",
   "thread_id": "example-thread"
 }
 

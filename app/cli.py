@@ -9,7 +9,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.container import AppContainer
-from app.evaluation.runner import run_evaluation
+from app.evaluation.v02_runner import run_v02_evaluation
 from app.security.jwt import JWTManager
 
 
@@ -40,13 +40,13 @@ def main() -> None:
 
     evaluate_parser = subparsers.add_parser(
         "evaluate",
-        help="执行 v0.1 离线评测",
+        help="执行 v0.2 离线评测",
     )
     evaluate_parser.add_argument("--mode", choices=("fake", "real"), default="fake")
     evaluate_parser.add_argument(
         "--output",
         type=Path,
-        default=Path("reports/v0.1-evaluation.json"),
+        default=Path("reports/v0.2-evaluation.json"),
     )
 
     args = parser.parse_args()
@@ -55,7 +55,9 @@ def main() -> None:
     elif args.command == "issue-token":
         _issue_token(args)
     elif args.command == "evaluate":
-        report = asyncio.run(run_evaluation(mode=args.mode, output_path=args.output))
+        report = asyncio.run(
+            run_v02_evaluation(mode=args.mode, output_path=args.output)
+        )
         print(json.dumps(
             {
                 "success": report.success,
