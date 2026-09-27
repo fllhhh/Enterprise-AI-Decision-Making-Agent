@@ -48,8 +48,8 @@ def create_app(
 
     application = FastAPI(
         title="Enterprise Decision Agent",
-        version="0.2.0",
-        description="v0.2 Hybrid RAG 和受控数据查询",
+        version="0.3.0",
+        description="v0.3 库存风险、白名单混合规划、审校和运行监控",
         lifespan=lifespan,
     )
     application.state.container = app_container

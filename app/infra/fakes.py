@@ -138,14 +138,21 @@ class FakeDatabase:
             return [
                 {
                     "product_id": "P-1001",
+                    "snapshot_date": date.today().isoformat(),
                     "quantity_on_hand": 320,
                     "quantity_in_transit": 80,
                 },
                 {
                     "product_id": "P-1002",
+                    "snapshot_date": date.today().isoformat(),
                     "quantity_on_hand": 180,
                     "quantity_in_transit": 0,
                 },
+            ]
+        if template.template_id == "inventory_velocity":
+            return [
+                {"product_id": "P-1001", "total_quantity": 120},
+                {"product_id": "P-1002", "total_quantity": 0},
             ]
         return []
 
@@ -246,10 +253,19 @@ def _fake_route(query: str) -> str:
             "畅销",
             "top",
             "TOP",
+            "风险",
+            "缺货",
+            "积压",
+            "滞销",
         )
     )
     if knowledge and data and any(term in query for term in ("结合", "同时", "综合分析")):
         return "mixed"
+    if any(term in query for term in ("库存风险", "缺货风险", "积压风险", "滞销风险")) or (
+        any(term in query for term in ("风险", "预警", "缺货", "积压", "滞销"))
+        and any(term in query for term in ("库存", "在库", "在途"))
+    ):
+        return "inventory_risk"
     if knowledge and data and any(
         term in query
         for term in (

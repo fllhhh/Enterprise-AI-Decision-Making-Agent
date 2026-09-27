@@ -1,20 +1,24 @@
-# 企业智能决策 Agent 平台 v0.2
+# 企业智能决策 Agent 平台 v0.3
 
-一个可运行、可验证的企业智能决策 Agent 可信纵向切片。服务通过 JWT 识别用户，以 LangGraph 固定工作流处理知识问答和受控数据查询，在生成答案前建立 Evidence，并通过 SSE 和 React 前端暴露业务可验收界面。
+一个可运行、可验证的企业智能决策 Agent 试运行版本。服务通过 JWT 识别用户，以 LangGraph 工作流处理知识问答、受控数据查询、库存风险和白名单混合分析，在最终响应前完成 Evidence 审校，并通过 SSE 和 React 控制台暴露执行过程。
 
-## v0.2 能力
+## v0.3 能力
 
 - `KnowledgeSkill`：本地 BGE Embedding、持久化 Chroma、BM25、RRF、Cross-Encoder Reranker、文档版本和 ACL 前置过滤、引用型答案。
 - `DataSkill`：保留三个已审批 ORM 查询模板；所有 PostgreSQL 查询在执行前通过 SQLGlot AST 白名单校验。
+- `InventoryRiskSkill`：以最近历史销量作为需求代理，确定性计算日均销量、可售天数、缺货、低库存和积压风险，并处理零销量与过期快照。
+- Mixed 白名单 Planner：只允许 `policy_plus_sales`、`policy_plus_inventory` 和 `inventory_risk_with_policy` 三种计划，并发执行后由确定性 Reducer 合并。
+- Answer Review：校验证据、引用、Mixed 分支完整性和数据数字，允许最多一次受控重试。
 - PostgreSQL 应用库：文档授权、数据授权、会话事件、审计和反馈。
-- SSE 流式接口、会话历史和 React + Vite + Tailwind CSS 对话前端。
-- LangGraph 固定流程：`normalize -> route -> knowledge|data|clarify|mixed_unsupported -> validate_evidence -> respond`。
+- SSE 流式接口、会话历史和 React + Vite + Tailwind CSS 运行控制台。
+- LangGraph 流程：`prepare -> route -> knowledge|data|inventory_risk|mixed -> review -> respond`。
+- Prometheus 文本指标和管理员审计查询接口。
 - 本地 HS256 JWT，包含 `sub`、`department`、`roles`、`iss`、`aud`、`iat`、`exp`。
 - 每个请求返回 `run_id`、`trace_id`、`thread_id`，并输出结构化运行日志。
 - PostgreSQL 业务库使用只读账号、参数绑定、结果行数限制、查询超时和 SQLGlot 白名单。
-- 112 条离线评测集，覆盖 Router、Hybrid RAG、Data、Security、SQLGlot、Reranker fallback 和 SSE。
+- 128 条离线评测集，覆盖 v0.2 全部门禁以及 InventoryRisk、Planner、Mixed、Review 和监控契约。
 
-明确不包含 Mixed、Planner、InventoryRisk、自由 Text2SQL、MCP、多 Agent、Redis、生产级数据库高可用和生产 Trace。
+明确不包含自由 Text2SQL、任意动态 Planner、MCP、多 Agent、Redis、生产级数据库高可用和生产 Trace；OpenTelemetry 与 Langfuse 留到 v1.0。
 
 ## 快速启动
 
@@ -55,6 +59,7 @@ psql -h 127.0.0.1 -p 5432 -U postgres -d postgres
 \i D:/python/project/enterpriseAgent/database/postgres/001_schema.sql
 \i D:/python/project/enterpriseAgent/database/postgres/002_seed.sql
 \i D:/python/project/enterpriseAgent/database/postgres/003_app_schema.sql
+\i D:/python/project/enterpriseAgent/database/postgres/004_v03.sql
 ```
 
 也可以通过项目脚本交互式输入管理员密码并完成初始化：
@@ -153,6 +158,11 @@ npm run build
 - `GET /health/live`：进程存活。
 - `GET /health/ready`：检查 Embedding、Chroma 和 PostgreSQL，任一失败返回 HTTP 503。
 
+### 运行监控
+
+- `GET /metrics`：不含业务内容和用户身份的 Prometheus 文本指标。
+- `GET /api/v1/audits`：仅 `admin` 角色可用，支持按 trace、用户和事件类型筛选。
+
 ## 测试与评测
 
 不安装本地 BGE 和 Chroma，只运行单元、契约和 Fake 端到端测试：
@@ -162,13 +172,13 @@ npm run build
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-运行 112 条离线评测：
+运行 128 条 v0.3 离线评测（包含 112 条 v0.2 回归）：
 
 ```powershell
 .\.venv\Scripts\enterprise-agent.exe evaluate --mode fake
 ```
 
-评测报告默认写入 `reports/v0.2-evaluation.json`，验收门禁为：
+评测报告默认写入 `reports/v0.3-evaluation.json`，验收门禁为：
 
 - Router accuracy 大于等于 90%。
 - Hybrid Recall@5 大于等于 85%。
@@ -179,6 +189,7 @@ npm run build
 - SSE 事件契约通过率等于 100%。
 - Evidence 覆盖率大于等于 90%。
 - 全部响应具有 trace_id。
+- v0.3 InventoryRisk 与 Mixed 增量用例通过率等于 100%。
 
 真实模式：
 
@@ -216,12 +227,12 @@ PostgreSQL 必须提供字段兼容的只读视图：
 app/
   api/           FastAPI 路由和认证依赖
   domain/        公共数据契约与错误类型
-  evaluation/    v0.1 和 v0.2 评测集及运行器
+  evaluation/    v0.1、v0.2 和 v0.3 评测集及运行器
   graph/         LangGraph 状态与固定工作流
   infra/         Hybrid RAG、SQLGlot、权限、应用库、日志和测试替身
   resources/     演示知识文档
   security/      JWT 签发与验证
-  skills/        Router、KnowledgeSkill、DataSkill
+  skills/        Router、Knowledge、Data、InventoryRisk、Planner、Review
 database/postgres/  PostgreSQL Schema、视图、账号和演示数据
 frontend/           React + Vite + Tailwind CSS 对话前端
 tests/           单元、ACL、API 和评测门禁测试

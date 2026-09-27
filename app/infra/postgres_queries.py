@@ -61,20 +61,48 @@ def build_top_products(parameters: Mapping[str, Any]) -> Select[Any]:
 
 def build_inventory_balance(parameters: Mapping[str, Any]) -> Select[Any]:
     """按商品汇总权限范围内的在库和在途数量。"""
+    latest_snapshot = (
+        select(func.max(AiInventorySnapshot.snapshot_date))
+        .where(_permission_clause(AiInventorySnapshot, parameters))
+        .scalar_subquery()
+    )
     statement = (
         select(
             AiInventorySnapshot.product_id,
+            func.max(AiInventorySnapshot.snapshot_date).label("snapshot_date"),
             func.sum(AiInventorySnapshot.quantity_on_hand).label("quantity_on_hand"),
             func.sum(AiInventorySnapshot.quantity_in_transit).label(
                 "quantity_in_transit"
             ),
         )
-        .where(_permission_clause(AiInventorySnapshot, parameters))
+        .where(
+            _permission_clause(AiInventorySnapshot, parameters),
+            AiInventorySnapshot.snapshot_date == latest_snapshot,
+        )
         .group_by(AiInventorySnapshot.product_id)
         .order_by(func.sum(AiInventorySnapshot.quantity_on_hand).desc())
         .limit(_positive_int(parameters, "row_limit"))
     )
     return statement
+
+
+def build_inventory_velocity(parameters: Mapping[str, Any]) -> Select[Any]:
+    """按商品汇总风险诊断回看窗口内的销量。"""
+    return (
+        select(
+            AiSalesOrder.product_id,
+            func.sum(AiSalesOrder.quantity).label("total_quantity"),
+        )
+        .where(
+            _permission_clause(AiSalesOrder, parameters),
+            AiSalesOrder.order_date.between(
+                parameters["period_start"], parameters["period_end"]
+            ),
+        )
+        .group_by(AiSalesOrder.product_id)
+        .order_by(AiSalesOrder.product_id)
+        .limit(_positive_int(parameters, "row_limit"))
+    )
 
 
 def _permission_clause(
@@ -93,4 +121,3 @@ def _positive_int(parameters: Mapping[str, Any], name: str) -> int:
     if value < 1:
         raise ValueError(f"{name} must be positive")
     return value
-

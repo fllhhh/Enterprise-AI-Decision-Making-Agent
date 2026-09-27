@@ -12,6 +12,7 @@ from app.container import AppContainer
 from app.domain.models import QueryRequest, Route, RunStatus
 from app.evaluation.dataset import EvaluationCase, build_v01_cases
 from app.infra.database import Database
+from app.infra.app_database import InMemoryAppRepository
 from app.infra.embeddings import EmbeddingProvider
 from app.infra.fakes import (
     FakeChatModel,
@@ -21,6 +22,8 @@ from app.infra.fakes import (
 )
 from app.infra.llm import ChatModel
 from app.infra.vector_store import VectorStore
+from app.infra.permissions import StaticPermissionService
+from app.infra.schema_catalog import SchemaCatalog
 
 
 @dataclass(slots=True)
@@ -91,12 +94,17 @@ async def _build_container(mode: Literal["fake", "real"]) -> AppContainer:
     settings = Settings()
     if mode == "real":
         return AppContainer(settings)
+    catalog = SchemaCatalog()
+    repository = InMemoryAppRepository()
     return AppContainer(
         settings.model_copy(update={"app_env": "test"}),
         chat_model=FakeChatModel(),
         embedding_provider=FakeEmbeddingProvider(),
         vector_store=InMemoryVectorStore(),
         database=FakeDatabase(),
+        schema_catalog=catalog,
+        app_repository=repository,
+        permission_service=StaticPermissionService(schema_catalog=catalog),
     )
 
 

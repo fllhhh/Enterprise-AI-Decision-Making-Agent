@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f8fafc;
+  --foreground: #1e293b;
+  --card: #ffffff;
+  --card-foreground: #1e293b;
+  --muted: #eaeff3;
+  --muted-foreground: #475569;
+  --primary: #475569;
+  --primary-foreground: #ffffff;
+  --secondary: #64748b;
+  --secondary-foreground: #ffffff;
+  --accent: #2563eb;
+  --accent-foreground: #ffffff;
+  --border: #e2e8f0;
+  --ring: #475569;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --success: #0f766e;
+  --success-soft: #ccfbf1;
+  --warning: #b45309;
+  --warning-soft: #ffedd5;
+  --danger-soft: #fee2e2;
+  --risk: #9a3412;
+  --risk-soft: #ffedd5;
+}
+
+.dark {
+  --background: #0f172a;
+  --foreground: #e2e8f0;
+  --card: #111c2e;
+  --card-foreground: #e2e8f0;
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8;
+  --primary: #cbd5e1;
+  --primary-foreground: #0f172a;
+  --secondary: #64748b;
+  --secondary-foreground: #ffffff;
+  --accent: #60a5fa;
+  --accent-foreground: #0f172a;
+  --border: #243449;
+  --ring: #94a3b8;
+  --destructive: #f87171;
+  --destructive-foreground: #0f172a;
+  --success: #2dd4bf;
+  --success-soft: #134e4a;
+  --warning: #fbbf24;
+  --warning-soft: #451a03;
+  --danger-soft: #450a0a;
+  --risk: #fdba74;
+  --risk-soft: #431407;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--foreground);
+  font-family:
+    "Work Sans",
+    "Segoe UI",
+    "Microsoft YaHei",
+    system-ui,
+    sans-serif;
+  letter-spacing: 0;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+.risk-card {
+  border-left-width: 4px;
+  border-left-color: var(--success);
+}
+
+.risk-card[data-severity="0"],
+.risk-card[data-severity="1"] {
+  border-left-color: var(--destructive);
+}
+
+.risk-card[data-severity="2"] {
+  border-left-color: var(--warning);
+}
+
+::selection {
+  background: rgba(37, 99, 235, 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

@@ -34,3 +34,8 @@ class AgentState(TypedDict, total=False):
     thread_id: str
     # 路由相关元数据，例如数据模板 ID 和返回行数。
     metadata: dict[str, Any]
+    # v0.3 白名单规划、并行步骤和回答审校。
+    plan: dict[str, Any] | None
+    step_results: list[dict[str, Any]]
+    review: dict[str, Any] | None
+    retry_count: int

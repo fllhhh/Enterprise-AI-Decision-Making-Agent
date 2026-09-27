@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     reranker_device: str = "cpu"
     query_rewriter_enabled: bool = False
 
+    # v0.3 库存风险、审校和运行监控。
+    inventory_lookback_days: int = Field(default=30, ge=7, le=180)
+    inventory_stale_after_days: int = Field(default=3, ge=1, le=30)
+    inventory_critical_days: float = Field(default=7.0, ge=0.0)
+    inventory_low_days: float = Field(default=14.0, ge=1.0)
+    inventory_overstock_days: float = Field(default=90.0, ge=1.0)
+    review_max_retries: int = Field(default=1, ge=0, le=1)
+
     @field_validator("chunk_overlap")
     @classmethod
     def overlap_must_be_smaller_than_chunk(cls, value: int, info) -> int:

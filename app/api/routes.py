@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from app.api.dependencies import get_container, get_principal
 from app.container import AppContainer
 from app.domain.models import (
     HealthResponse,
+    AuditEvent,
+    AuditListResponse,
     FeedbackRequest,
     Principal,
     QueryRequest,
@@ -25,7 +27,7 @@ async def root() -> dict[str, str]:
     """返回轻量服务描述，不启动 Agent 工作流。"""
     return {
         "service": "enterprise-agent",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "docs": "/docs",
         "ui": "/ui",
     }
@@ -64,7 +66,52 @@ async def query(
     container: AppContainer = Depends(get_container),
 ) -> QueryResponse:
     """校验身份并执行一次 Agent 工作流。"""
-    return await container.workflow.run(request=payload, principal=principal)
+    response = await container.workflow.run(request=payload, principal=principal)
+    await container.app_repository.record_audit(
+        trace_id=response.trace_id,
+        run_id=response.run_id,
+        thread_id=response.thread_id,
+        user_id=principal.user_id,
+        event_type="agent_run_completed",
+        payload={
+            "route": response.route.value,
+            "status": response.status.value,
+            "plan_id": (response.plan or {}).get("plan_id"),
+            "retry_count": response.retry_count,
+        },
+    )
+    return response
+
+
+@router.get("/metrics", response_class=PlainTextResponse, tags=["monitoring"])
+async def metrics(container: AppContainer = Depends(get_container)) -> PlainTextResponse:
+    """暴露不含业务内容和身份信息的 Prometheus 文本指标。"""
+    return PlainTextResponse(container.metrics.render(), media_type="text/plain; version=0.0.4")
+
+
+@router.get(
+    "/api/v1/audits",
+    response_model=AuditListResponse,
+    tags=["monitoring"],
+    summary="管理员查询审计事件",
+)
+async def audits(
+    trace_id: str | None = None,
+    user_id: str | None = None,
+    event_type: str | None = None,
+    limit: int = 100,
+    principal: Principal = Depends(get_principal),
+    container: AppContainer = Depends(get_container),
+) -> AuditListResponse:
+    if "admin" not in principal.roles:
+        raise HTTPException(status_code=403, detail={"code": "ADMIN_REQUIRED", "message": "仅管理员可查询审计事件"})
+    rows = await container.app_repository.list_audits(
+        trace_id=trace_id,
+        user_id=user_id,
+        event_type=event_type,
+        limit=max(1, min(limit, 500)),
+    )
+    return AuditListResponse(events=[AuditEvent.model_validate(row) for row in rows])
 
 
 @router.post(

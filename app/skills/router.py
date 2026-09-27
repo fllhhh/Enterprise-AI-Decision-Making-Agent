@@ -58,6 +58,10 @@ _DATA_TERMS = (
     "畅销",
     "top",
     "TOP",
+    "风险",
+    "缺货",
+    "积压",
+    "滞销",
 )
 _MIXED_TERMS = ("结合", "同时", "并根据", "再根据", "对照", "融合", "综合分析")
 _CLARIFY_PATTERNS = (
@@ -137,6 +141,15 @@ def _rule_decision(query: str) -> RouterDecision | None:
             route=Route.MIXED,
             confidence=0.95,
             reason="同时包含知识依据、数据指标和综合分析要求",
+        )
+    if any(term in query for term in ("库存风险", "缺货风险", "积压风险", "滞销风险")) or (
+        any(term in query for term in ("风险", "预警", "缺货", "积压", "滞销"))
+        and any(term in query for term in ("库存", "在库", "在途"))
+    ):
+        return RouterDecision(
+            route=Route.INVENTORY_RISK,
+            confidence=0.97,
+            reason="命中库存风险诊断意图",
         )
     if knowledge_hits and not data_hits:
         return RouterDecision(route=Route.KNOWLEDGE, confidence=0.90, reason="命中知识关键词")

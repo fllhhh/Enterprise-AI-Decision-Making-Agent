@@ -21,6 +21,7 @@ from app.infra.llm import ChatModel
 from app.infra.permissions import PermissionService
 from app.infra.postgres_queries import (
     build_inventory_balance,
+    build_inventory_velocity,
     build_sales_summary,
     build_top_products,
 )
@@ -105,6 +106,19 @@ class QueryTemplateRegistry:
                     timeout_seconds=timeout_seconds,
                     max_rows=max_rows,
                 ),
+                QueryTemplate(
+                    template_id="inventory_velocity",
+                    title="商品历史销量",
+                    description="按日期范围汇总商品销量，供库存风险规则使用",
+                    statement_builder=build_inventory_velocity,
+                    view_name="v_ai_sales_orders",
+                    arguments=(
+                        TemplateArgument("period_start", ArgumentType.DATE, True, "开始日期"),
+                        TemplateArgument("period_end", ArgumentType.DATE, True, "结束日期"),
+                    ),
+                    timeout_seconds=timeout_seconds,
+                    max_rows=max_rows,
+                ),
             )
         }
 
@@ -118,7 +132,11 @@ class QueryTemplateRegistry:
 
     def prompt_description(self) -> str:
         """生成不含 SQL 文本、可供 LLM 查看的能力列表。"""
-        return "\n".join(template.prompt_description() for template in self.all())
+        return "\n".join(
+            template.prompt_description()
+            for template in self.all()
+            if template.template_id != "inventory_velocity"
+        )
 
 
 class DataSkill:
@@ -153,7 +171,7 @@ class DataSkill:
                     "查询意图不够明确，请补充指标和时间范围。",
                     "LOW_CONFIDENCE",
                 )
-            return _clarify("当前只支持销售汇总、畅销商品和库存结余查询。", "TEMPLATE_NOT_FOUND")
+            return _clarify("当前只支持销售汇总、畅销商品、库存结余和库存风险查询。", "TEMPLATE_NOT_FOUND")
         template = self._registry.get(decision.template_id)
         if template is None:
             if decision.confidence < self._confidence_threshold:
@@ -313,7 +331,7 @@ def _data_evidence(
         kind=EvidenceKind.DATA,
         source_id=template.template_id,
         title=template.title,
-        version="v0.2",
+        version="v0.3",
         locator=f"template={template.template_id}",
         excerpt=excerpt,
         score=1.0,

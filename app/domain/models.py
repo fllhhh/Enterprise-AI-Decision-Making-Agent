@@ -18,6 +18,7 @@ class Route(StrEnum):
 
     KNOWLEDGE = "knowledge"
     DATA = "data"
+    INVENTORY_RISK = "inventory_risk"
     MIXED = "mixed"
     CLARIFY = "clarify"
 
@@ -36,6 +37,7 @@ class EvidenceKind(StrEnum):
 
     DOCUMENT = "document"
     DATA = "data"
+    RISK = "risk"
 
 
 class Evidence(BaseModel):
@@ -96,6 +98,27 @@ class QueryResponse(BaseModel):
     answer: str
     evidence: list[Evidence] = Field(default_factory=list)
     error: ErrorDetail | None = None
+    plan: dict[str, Any] | None = None
+    review: dict[str, Any] | None = None
+    retry_count: int = Field(default=0, ge=0, le=1)
+
+
+class AuditEvent(BaseModel):
+    """面向管理员的脱敏审计记录。"""
+
+    trace_id: str
+    run_id: str
+    thread_id: str
+    user_id: str
+    event_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str | None = None
+
+
+class AuditListResponse(BaseModel):
+    """分页前的小规模审计查询响应。"""
+
+    events: list[AuditEvent] = Field(default_factory=list)
 
 
 class Principal(BaseModel):

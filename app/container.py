@@ -30,10 +30,14 @@ from app.infra.retrieval import (
 from app.infra.vector_store import ChromaVectorStore, VectorStore
 from app.infra.schema_catalog import SchemaCatalog
 from app.infra.sql_guard import SqlGuard
+from app.infra.metrics import RuntimeMetrics
 from app.security.jwt import JWTManager
 from app.skills.data import DataSkill, QueryTemplateRegistry
 from app.skills.knowledge import KnowledgeSkill
 from app.skills.router import RouterSkill
+from app.skills.inventory_risk import InventoryRiskSkill
+from app.skills.planner import WhitelistPlanner
+from app.skills.review import AnswerReviewer
 from app.graph.workflow import AgentWorkflow
 
 
@@ -52,9 +56,11 @@ class AppContainer:
         permission_service: PermissionService | None = None,
         schema_catalog: SchemaCatalog | None = None,
         app_repository: AppRepository | None = None,
+        metrics: RuntimeMetrics | None = None,
     ) -> None:
         """创建默认适配器并注入工作流。"""
         self.settings = settings
+        self.metrics = metrics or RuntimeMetrics()
         self.security = JWTManager(settings)
         self.chat_model = chat_model or OpenAICompatibleChatModel(
             base_url=settings.llm_base_url,
@@ -95,7 +101,12 @@ class AppContainer:
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
         )
-        app_db_dsn = settings.app_db_dsn.get_secret_value() if settings.app_db_dsn else None
+        # 测试环境必须与开发机 .env 隔离；只有显式注入的测试替身可改变依赖。
+        app_db_dsn = (
+            settings.app_db_dsn.get_secret_value()
+            if settings.app_db_dsn and settings.app_env != "test"
+            else None
+        )
         self.app_repository = app_repository or (
             PostgresAppRepository(dsn=app_db_dsn)
             if app_db_dsn
@@ -147,11 +158,28 @@ class AppContainer:
             permission_service=self.permission_service,
             confidence_threshold=settings.router_confidence_threshold,
         )
+        self.inventory_risk_skill = InventoryRiskSkill(
+            registry=self.template_registry,
+            database=self.database,
+            permission_service=self.permission_service,
+            lookback_days=settings.inventory_lookback_days,
+            stale_after_days=settings.inventory_stale_after_days,
+            critical_days=settings.inventory_critical_days,
+            low_days=settings.inventory_low_days,
+            overstock_days=settings.inventory_overstock_days,
+        )
+        self.planner = WhitelistPlanner()
+        self.reviewer = AnswerReviewer()
         # 注入工作流
         self.workflow = AgentWorkflow(
             router=self.router,
             knowledge_skill=self.knowledge_skill,
             data_skill=self.data_skill,
+            inventory_risk_skill=self.inventory_risk_skill,
+            planner=self.planner,
+            reviewer=self.reviewer,
+            metrics=self.metrics,
+            max_retries=settings.review_max_retries,
         )
 
     async def startup(self) -> None:

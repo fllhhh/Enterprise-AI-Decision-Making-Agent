@@ -5,6 +5,8 @@ langgraph<2,>=0.6
 pydantic<3,>=2.13
 pydantic-settings<3,>=2.12
 PyJWT<3,>=2.10
+rank-bm25<1,>=0.2.2
+sqlglot<29,>=27
 SQLAlchemy<3,>=2.0
 uvicorn[standard]<1,>=0.52
 

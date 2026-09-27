@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from time import perf_counter
@@ -27,9 +28,14 @@ from app.domain.models import (
 )
 from app.graph.state import AgentState
 from app.infra.logging import trace_id_var
+from app.infra.metrics import RuntimeMetrics
+from app.skills.base import SkillOutcome
 from app.skills.data import DataSkill
 from app.skills.knowledge import KnowledgeSkill
 from app.skills.router import RouterSkill
+from app.skills.inventory_risk import InventoryRiskSkill
+from app.skills.planner import ExecutionPlan, WhitelistPlanner
+from app.skills.review import AnswerReviewer
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +49,21 @@ class AgentWorkflow:
         router: RouterSkill,
         knowledge_skill: KnowledgeSkill,
         data_skill: DataSkill,
+        inventory_risk_skill: InventoryRiskSkill,
+        planner: WhitelistPlanner,
+        reviewer: AnswerReviewer,
+        metrics: RuntimeMetrics,
+        max_retries: int = 1,
     ) -> None:
         """保存 Skill 依赖，并只编译一次固定工作流图。"""
         self._router = router
         self._knowledge_skill = knowledge_skill
         self._data_skill = data_skill
+        self._inventory_risk_skill = inventory_risk_skill
+        self._planner = planner
+        self._reviewer = reviewer
+        self._metrics = metrics
+        self._max_retries = max_retries
         self._graph = self._build()
 
     async def run(self, *, request: QueryRequest, principal: Principal) -> QueryResponse:
@@ -68,6 +84,9 @@ class AgentWorkflow:
             config={"configurable": {"thread_id": thread_id}},
         )
         response = _to_response(result)
+        duration = perf_counter() - started
+        self._metrics.increment("requests_total", route=response.route.value, status=response.status.value)
+        self._metrics.observe_seconds("request_duration_seconds", duration, route=response.route.value)
         logger.info(
             "agent_run_completed",
             extra={
@@ -79,7 +98,7 @@ class AgentWorkflow:
                 "skill": response.route.value,
                 "template_id": (result.get("metadata") or {}).get("template_id"),
                 "row_count": (result.get("metadata") or {}).get("row_count"),
-                "duration_ms": round((perf_counter() - started) * 1000, 2),
+                "duration_ms": round(duration * 1000, 2),
             },
         )
         return response
@@ -144,6 +163,9 @@ class AgentWorkflow:
 
             final_state = await self._graph.aget_state(config)
             response = _to_response(final_state.values)
+            duration = perf_counter() - started
+            self._metrics.increment("requests_total", route=response.route.value, status=response.status.value)
+            self._metrics.observe_seconds("request_duration_seconds", duration, route=response.route.value)
             yield _event(
                 "completed",
                 run_id,
@@ -159,7 +181,7 @@ class AgentWorkflow:
                     "user_id": principal.user_id,
                     "route": response.route.value,
                     "status": response.status.value,
-                    "duration_ms": round((perf_counter() - started) * 1000, 2),
+                    "duration_ms": round(duration * 1000, 2),
                 },
             )
         except Exception as exc:
@@ -182,9 +204,10 @@ class AgentWorkflow:
         graph.add_node("route", self._route)
         graph.add_node("knowledge", self._knowledge)
         graph.add_node("data", self._data)
+        graph.add_node("inventory_risk", self._inventory_risk)
+        graph.add_node("mixed", self._mixed)
         graph.add_node("clarify", self._clarify)
-        graph.add_node("mixed_unsupported", self._mixed_unsupported)
-        graph.add_node("validate_evidence", self._validate_evidence)
+        graph.add_node("review", self._review)
         graph.add_node("respond", self._respond)
 
         graph.add_edge(START, "prepare")
@@ -195,15 +218,17 @@ class AgentWorkflow:
             {
                 Route.KNOWLEDGE.value: "knowledge",
                 Route.DATA.value: "data",
+                Route.INVENTORY_RISK.value: "inventory_risk",
                 Route.CLARIFY.value: "clarify",
-                Route.MIXED.value: "mixed_unsupported",
+                Route.MIXED.value: "mixed",
             },
         )
-        graph.add_edge("knowledge", "validate_evidence")
-        graph.add_edge("data", "validate_evidence")
+        graph.add_edge("knowledge", "review")
+        graph.add_edge("data", "review")
+        graph.add_edge("inventory_risk", "review")
+        graph.add_edge("mixed", "review")
         graph.add_edge("clarify", "respond")
-        graph.add_edge("mixed_unsupported", "respond")
-        graph.add_edge("validate_evidence", "respond")
+        graph.add_edge("review", "respond")
         graph.add_edge("respond", END)
         return graph.compile(checkpointer=MemorySaver())
 
@@ -225,6 +250,10 @@ class AgentWorkflow:
             "error_code": None,
             "error_message": None,
             "metadata": {},
+            "plan": None,
+            "step_results": [],
+            "review": None,
+            "retry_count": 0,
         }
 
     async def _route(self, state: AgentState) -> dict[str, Any]:
@@ -257,6 +286,41 @@ class AgentWorkflow:
         )
         return _outcome_update(outcome)
 
+    async def _inventory_risk(self, state: AgentState) -> dict[str, Any]:
+        principal = Principal.model_validate(state["principal"])
+        outcome = await self._inventory_risk_skill.answer(
+            query=state["query"], principal=principal
+        )
+        return _outcome_update(outcome)
+
+    async def _mixed(self, state: AgentState) -> dict[str, Any]:
+        """并发执行白名单计划，并通过确定性 Reducer 合并结果。"""
+        plan = self._planner.plan(state["query"])
+        if plan is None:
+            return {
+                "status": RunStatus.CLARIFY.value,
+                "answer": "该混合请求未命中已审批计划，请明确销售、库存或库存风险主题。",
+                "error_code": "PLAN_NOT_FOUND",
+                "plan": None,
+            }
+        principal = Principal.model_validate(state["principal"])
+        tasks = [self._run_plan_step(step.skill, state["query"], principal) for step in plan.steps]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+        patch = _reduce_plan_results(plan, raw_results)
+        self._metrics.increment(
+            "planner_total", plan_id=plan.plan_id, status=patch["status"]
+        )
+        return patch
+
+    async def _run_plan_step(self, skill: str, query: str, principal: Principal) -> SkillOutcome:
+        if skill == "knowledge":
+            return await self._knowledge_skill.answer(query=query, principal=principal)
+        if skill == "data":
+            return await self._data_skill.answer(query=query, principal=principal)
+        if skill == "inventory_risk":
+            return await self._inventory_risk_skill.answer(query=query, principal=principal)
+        raise ValueError(f"未注册的计划步骤: {skill}")
+
     async def _clarify(self, state: AgentState) -> dict[str, Any]:
         """当路由不明确时，要求用户补充信息。"""
         return {
@@ -265,36 +329,47 @@ class AgentWorkflow:
             "error_code": "ROUTE_CLARIFY",
         }
 
-    async def _mixed_unsupported(self, state: AgentState) -> dict[str, Any]:
-        """明确拒绝超出当前版本范围的 Mixed 请求。"""
+    async def _review(self, state: AgentState) -> dict[str, Any]:
+        result = self._review_state(state)
+        if result.passed:
+            self._metrics.increment("review_total", outcome="passed")
+            return {"review": result.as_dict()}
+        if result.retryable and int(state.get("retry_count", 0)) < self._max_retries:
+            retry_patch = await self._retry_route(state)
+            retry_state = {**state, **retry_patch, "retry_count": 1}
+            second = self._review_state(retry_state)
+            self._metrics.increment("review_total", outcome="retried")
+            if second.passed:
+                return {**retry_patch, "retry_count": 1, "review": second.as_dict()}
+            result = second
+        self._metrics.increment("review_total", outcome="failed")
         return {
-            "status": RunStatus.UNSUPPORTED.value,
-            "answer": "当前版本暂不支持同时执行知识检索和数据查询，请拆分为两个问题。",
-            "error_code": "MIXED_NOT_SUPPORTED",
+            "status": RunStatus.CLARIFY.value,
+            "answer": "回答未通过证据审校，请补充条件或稍后重试。",
+            "error_code": result.code,
+            "review": result.as_dict(),
+            "retry_count": min(1, int(state.get("retry_count", 0)) + int(result.retryable)),
         }
 
-    async def _validate_evidence(self, state: AgentState) -> dict[str, Any]:
-        """在响应前执行确定性的最低 Evidence 门禁。"""
-        if state.get("status") != RunStatus.ANSWERED.value:
-            return {}
-        evidence = state.get("evidence") or []
-        if not evidence:
-            return {
-                "status": RunStatus.CLARIFY.value,
-                "answer": "当前没有可验证的证据，无法给出事实性回答。",
-                "error_code": "NO_EVIDENCE",
-            }
+    def _review_state(self, state: AgentState):
+        return self._reviewer.review(
+            route=Route(state.get("route", Route.CLARIFY.value)),
+            status=RunStatus(state.get("status", RunStatus.CLARIFY.value)),
+            answer=state.get("answer", ""),
+            evidence=[Evidence.model_validate(item) for item in state.get("evidence", [])],
+            plan=state.get("plan"),
+        )
 
-        known_ids = {item["evidence_id"] for item in evidence}
-        answer = state.get("answer") or ""
-        if state.get("route") == Route.KNOWLEDGE.value and not any(
-            f"[{evidence_id}]" in answer for evidence_id in known_ids
-        ):
-            return {
-                "status": RunStatus.CLARIFY.value,
-                "answer": "回答未能绑定可验证证据，请换一种问法。",
-                "error_code": "EVIDENCE_VALIDATION_FAILED",
-            }
+    async def _retry_route(self, state: AgentState) -> dict[str, Any]:
+        route = Route(state["route"])
+        if route == Route.KNOWLEDGE:
+            return await self._knowledge(state)
+        if route == Route.DATA:
+            return await self._data(state)
+        if route == Route.INVENTORY_RISK:
+            return await self._inventory_risk(state)
+        if route == Route.MIXED:
+            return await self._mixed(state)
         return {}
 
     async def _respond(self, state: AgentState) -> dict[str, Any]:
@@ -334,6 +409,66 @@ def _outcome_update(outcome) -> dict[str, Any]:
     }
 
 
+def _reduce_plan_results(
+    plan: ExecutionPlan,
+    raw_results: list[SkillOutcome | BaseException],
+) -> dict[str, Any]:
+    """按计划顺序确定性合并并发结果，避免分支完成顺序影响答案。"""
+    evidence: list[Evidence] = []
+    answer_sections: list[str] = []
+    step_results: list[dict[str, Any]] = []
+    required_failed = False
+    for step, result in zip(plan.steps, raw_results, strict=True):
+        if isinstance(result, BaseException):
+            required_failed = required_failed or step.required
+            step_results.append(
+                {
+                    "step_id": step.step_id,
+                    "skill": step.skill,
+                    "status": "error",
+                    "error_code": type(result).__name__,
+                }
+            )
+            continue
+        step_results.append(
+            {
+                "step_id": step.step_id,
+                "skill": step.skill,
+                "status": result.status.value,
+                "error_code": result.error_code,
+            }
+        )
+        if result.status != RunStatus.ANSWERED:
+            required_failed = required_failed or step.required
+            continue
+        rewritten = result.answer
+        for item in result.evidence:
+            old_id = item.evidence_id
+            new_id = f"E{len(evidence) + 1}"
+            rewritten = rewritten.replace(f"[{old_id}]", f"[{new_id}]")
+            evidence.append(item.model_copy(update={"evidence_id": new_id}))
+        answer_sections.append(f"{step.step_id}：\n{rewritten}")
+    if required_failed or not answer_sections:
+        return {
+            "status": RunStatus.CLARIFY.value,
+            "answer": "混合计划的必要步骤未完成，请补充查询条件或稍后重试。",
+            "evidence": [item.model_dump(mode="json") for item in evidence],
+            "error_code": "PLAN_STEP_FAILED",
+            "plan": plan.as_dict(),
+            "step_results": step_results,
+            "metadata": {"plan_id": plan.plan_id},
+        }
+    return {
+        "status": RunStatus.ANSWERED.value,
+        "answer": f"已按白名单计划“{plan.title}”并行完成分析：\n\n" + "\n\n".join(answer_sections),
+        "evidence": [item.model_dump(mode="json") for item in evidence],
+        "error_code": None,
+        "plan": plan.as_dict(),
+        "step_results": step_results,
+        "metadata": {"plan_id": plan.plan_id, "step_count": len(plan.steps)},
+    }
+
+
 def _event(
     event_type: str,
     run_id: str,
@@ -369,8 +504,13 @@ def _events_for_node(
                 },
             )
         ]
-    if node_name in {"knowledge", "data", "clarify", "mixed_unsupported"}:
+    if node_name in {"knowledge", "data", "inventory_risk", "mixed", "clarify"}:
         events: list[tuple[str, dict[str, Any]]] = []
+        if node_name == "mixed" and patch.get("plan"):
+            events.append(("plan_created", {"plan": patch["plan"]}))
+            for result in patch.get("step_results") or []:
+                events.append(("step_started", {"step_id": result.get("step_id"), "skill": result.get("skill")}))
+                events.append(("step_completed", result))
         if node_name == "data":
             events.append(
                 (
@@ -397,17 +537,13 @@ def _events_for_node(
                 )
             )
         return events
-    if node_name == "validate_evidence" and patch.get("answer"):
-        return [
-            (
-                "answer",
-                {
-                    "status": patch.get("status"),
-                    "answer": patch.get("answer"),
-                    "error_code": patch.get("error_code"),
-                },
-            )
-        ]
+    if node_name == "review":
+        events = [("review_completed", {"review": patch.get("review")})]
+        if patch.get("retry_count"):
+            events.insert(0, ("retry_started", {"retry_count": patch["retry_count"]}))
+        if patch.get("answer"):
+            events.append(("answer", {"status": patch.get("status"), "answer": patch.get("answer"), "error_code": patch.get("error_code")}))
+        return events
     return []
 
 
@@ -442,6 +578,9 @@ def _to_response(state: AgentState) -> QueryResponse:
             for item in (state.get("evidence") or [])
         ],
         error=error,
+        plan=state.get("plan"),
+        review=state.get("review"),
+        retry_count=int(state.get("retry_count", 0)),
     )
 
 
